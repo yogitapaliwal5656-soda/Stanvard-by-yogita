@@ -1,43 +1,43 @@
 [
   {
-    "content": "Phase 1: Get Razorpay integration playbook",
+    "content": "Phase 1: Core POC complete",
     "status": "completed"
   },
   {
-    "content": "Phase 1: Ask user for Razorpay test API keys",
+    "content": "Phase 2: Design guidelines received",
     "status": "completed"
-  },
-  {
-    "content": "Phase 1: Create POC test script (Razorpay order + signature verify + PDF receipt)",
-    "status": "completed"
-  },
-  {
-    "content": "Phase 1: Run POC and fix until it passes",
-    "status": "completed"
-  },
-  {
-    "content": "Phase 2: Call design_agent for enterprise UI guidelines",
-    "status": "in_progress"
   },
   {
     "content": "Phase 2: Install backend + frontend dependencies",
-    "status": "pending"
+    "status": "completed"
   },
   {
     "content": "Phase 2: Build multi-tenant backend (auth, schools, students, fees, payments, attendance, etc.)",
-    "status": "pending"
-  },
-  {
-    "content": "Phase 2: Build frontend (login, dashboard, school switcher, all role portals)",
-    "status": "pending"
+    "status": "completed"
   },
   {
     "content": "Phase 2: Seed 3 schools + demo users + sample students/classes/fees/attendance",
-    "status": "pending"
+    "status": "completed"
+  },
+  {
+    "content": "Phase 2: Build frontend - core (index.css, App.js, contexts, layout, login, dashboard)",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 2: Build frontend - modules (students, fees, attendance, homework, etc.)",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 2: Build frontend - parent portal",
+    "status": "completed"
+  },
+  {
+    "content": "Phase 2: All user stories covered - visible dashboards, school switcher, fee collection, receipts, attendance, homework, parent portal",
+    "status": "completed"
   },
   {
     "content": "Phase 2: End-to-end testing with testing_agent_v3",
-    "status": "pending"
+    "status": "in_progress"
   },
   {
     "content": "Phase 2: Fix all issues found in testing",
