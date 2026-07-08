@@ -49,7 +49,7 @@ def test_razorpay_order_creation():
             }
         }
         order = client.order.create(data=order_payload)
-        print(f"✅ Order created successfully")
+        print("✅ Order created successfully")
         print(f"   Order ID: {order['id']}")
         print(f"   Amount: ₹{order['amount']/100:.2f} {order['currency']}")
         print(f"   Receipt: {order['receipt']}")
@@ -87,13 +87,13 @@ def test_payment_signature_verification():
         print(f"   Payment ID: {mock_payment_id}")
         print(f"   Signature:  {expected_signature[:40]}...")
         assert is_valid, "Signature mismatch"
-        print(f"✅ Signature verification algorithm works correctly")
+        print("✅ Signature verification algorithm works correctly")
 
         # Test tampered signature is rejected
         tampered = "0" * 64
         is_tampered_valid = hmac.compare_digest(tampered, computed)
         assert not is_tampered_valid, "Tampered signature should not verify"
-        print(f"✅ Tampered signature correctly rejected")
+        print("✅ Tampered signature correctly rejected")
         return True
     except Exception as e:
         print(f"❌ FAILED: {type(e).__name__}: {e}")
@@ -129,7 +129,7 @@ def test_webhook_signature_verification():
         assert hmac.compare_digest(expected_sig, computed)
         print(f"   Webhook body length: {len(webhook_body)} bytes")
         print(f"   Signature:           {expected_sig[:40]}...")
-        print(f"✅ Webhook signature verification works")
+        print("✅ Webhook signature verification works")
         return True
     except Exception as e:
         print(f"❌ FAILED: {type(e).__name__}: {e}")
@@ -278,7 +278,7 @@ def test_pdf_receipt_generation():
         doc.build(story)
         size = pdf_path.stat().st_size
         assert size > 1000, "PDF unexpectedly small"
-        print(f"✅ PDF receipt generated")
+        print("✅ PDF receipt generated")
         print(f"   Path: {pdf_path}")
         print(f"   Size: {size} bytes")
         print(f"   Receipt No: {receipt_no}")

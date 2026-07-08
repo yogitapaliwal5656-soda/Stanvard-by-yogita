@@ -108,7 +108,7 @@ async def seed_fee_heads(schools):
         heads = [FeeHead(school_id=sc.id, name=n, category=c) for n, c in head_names]
         await fee_heads_col.insert_many([h.model_dump() for h in heads])
         all_heads[sc.id] = heads
-    print(f'  Seeded fee heads')
+    print('  Seeded fee heads')
     return all_heads
 
 
@@ -137,7 +137,7 @@ async def seed_fee_plans(schools, all_classes, all_heads):
                           late_fee_after_day=10)
             await fee_plans_col.insert_one(plan.model_dump())
             all_plans.setdefault(sc.id, {})[cls.id] = plan
-    print(f'  Seeded fee plans')
+    print('  Seeded fee plans')
     return all_plans
 
 
@@ -264,7 +264,7 @@ async def seed_homework(schools, all_classes):
                     school_id=sc.id, class_id=cls.id, section='A',
                     subject=subj,
                     title=f'{subj} homework for {cls.name}',
-                    description=f'Complete exercises 1 to 10 from chapter 3. Submit before due date.',
+                    description='Complete exercises 1 to 10 from chapter 3. Submit before due date.',
                     due_date=(datetime.now() + timedelta(days=random.randint(2, 7))).strftime('%Y-%m-%d'),
                     created_by_name='Class Teacher',
                 )
@@ -320,7 +320,7 @@ async def seed_events_circulars_gallery(schools):
                                 'https://images.unsplash.com/photo-1577896851231-70ef18881754?w=800']),
         ]
         await gallery_col.insert_many([g.model_dump() for g in gallery])
-    print(f'  Seeded events, circulars, gallery for all schools')
+    print('  Seeded events, circulars, gallery for all schools')
 
 
 async def seed_staff_notifications_timetable(schools, all_classes):
@@ -359,7 +359,7 @@ async def seed_staff_notifications_timetable(schools, all_classes):
                 ))
         tt = Timetable(school_id=sc.id, class_id=cls.id, section='A', slots=slots)
         await timetable_col.insert_one(tt.model_dump())
-    print(f'  Seeded staff, notifications, timetable')
+    print('  Seeded staff, notifications, timetable')
 
 
 async def main():
