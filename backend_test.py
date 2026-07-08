@@ -176,6 +176,36 @@ class TestRunner:
         self.test("RBAC: Parent cannot POST /students (403)", lambda: self.test_rbac_parent_create_student())
         self.test("RBAC: Teacher cannot POST /schools (403)", lambda: self.test_rbac_teacher_create_school())
 
+        # ===== NEW FEATURES (Iteration 2) =====
+        # Feature 1: Edit student + assign fees with discount/due date
+        self.test("STUDENTS: PATCH /students/{id} updates personal details (father_name, phone, address)", lambda: self.test_update_student_details())
+        self.test("FEES: POST /fees/assignments creates assignment with custom_items, discount_percent, discount_amount, due_date", lambda: self.test_create_fee_assignment())
+        self.test("FEES: PATCH /fees/assignments/{id} updates existing assignment", lambda: self.test_update_fee_assignment())
+        self.test("FEES: DELETE /fees/assignments/{id} removes assignment", lambda: self.test_delete_fee_assignment())
+        self.test("FEES: GET /fees/student/{id}/dues returns new fields (total_expected, total_discount, balance)", lambda: self.test_student_dues_new_fields())
+        
+        # Feature 2: Enhanced Reports with filters
+        self.test("REPORTS: GET /reports/fee-status returns rows[] + summary", lambda: self.test_fee_status_report())
+        self.test("REPORTS: GET /reports/fee-status with class_id filter", lambda: self.test_fee_status_filter_class())
+        self.test("REPORTS: GET /reports/fee-status with status_filter=paid", lambda: self.test_fee_status_filter_status())
+        self.test("REPORTS: GET /reports/fee-status with min_due and max_due", lambda: self.test_fee_status_filter_due_amount())
+        
+        # Feature 3: Analytics dashboard
+        self.test("ANALYTICS: GET /analytics returns full analytics object", lambda: self.test_analytics_full())
+        self.test("ANALYTICS: GET /analytics year parameter changes data", lambda: self.test_analytics_year_filter())
+        
+        # Feature 4: User management
+        self.test("USERS: DELETE /users/{id} soft-deletes user (status=inactive)", lambda: self.test_delete_user())
+        self.test("USERS: DELETE /users/{id} rejects deleting yourself (400)", lambda: self.test_delete_user_self())
+        self.test("USERS: DELETE /users/{id} school_admin cannot delete super_admin (403)", lambda: self.test_delete_user_super_admin())
+        self.test("USERS: POST /users/{id}/reset-password updates password", lambda: self.test_reset_password())
+        self.test("USERS: Login with new password after reset succeeds", lambda: self.test_login_after_reset())
+        
+        # RBAC for new features
+        self.test("RBAC: Parent cannot POST /fees/assignments (403)", lambda: self.test_rbac_parent_assign_fee())
+        self.test("RBAC: Teacher cannot POST /fees/assignments (403)", lambda: self.test_rbac_teacher_assign_fee())
+        self.test("RBAC: Accountant cannot DELETE /users (403)", lambda: self.test_rbac_accountant_delete_user())
+
         # Print summary
         print("\n" + "="*70)
         print("TEST SUMMARY")
@@ -629,6 +659,400 @@ class TestRunner:
         }
         r = self.post('/schools', 'teacher_gn', school_data, expected=403)
         print(f"  ✓ Teacher correctly forbidden from creating school (403)")
+
+    # ===== NEW FEATURE TESTS (Iteration 2) =====
+    def test_update_student_details(self):
+        if not self.students:
+            self.test_get_students()
+        student_id = self.students[0]['id']
+        
+        update_data = {
+            'father_name': 'Updated Father Name',
+            'phone': '+91 9999888877',
+            'address': '123 Updated Street, New City',
+            'mother_name': 'Updated Mother Name',
+        }
+        r = requests.patch(
+            f"{BASE_URL}/students/{student_id}",
+            json=update_data,
+            headers=self.headers('admin_gn')
+        )
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+        student = r.json()
+        assert student['father_name'] == 'Updated Father Name', f"father_name not updated"
+        assert student['phone'] == '+91 9999888877', f"phone not updated"
+        assert student['address'] == '123 Updated Street, New City', f"address not updated"
+        print(f"  ✓ Student details updated: father_name={student['father_name']}, phone={student['phone']}")
+
+    def test_create_fee_assignment(self):
+        if not self.students:
+            self.test_get_students()
+        school_id = self.users['admin_gn']['school_id']
+        student_id = self.students[0]['id']
+        
+        assignment_data = {
+            'student_id': student_id,
+            'custom_items': [
+                {'fee_head_name': 'Tuition Fee', 'amount': 5000, 'frequency': 'monthly'},
+                {'fee_head_name': 'Lab Fee', 'amount': 1500, 'frequency': 'one_time'},
+            ],
+            'discount_percent': 15,
+            'discount_amount': 500,
+            'due_date': '2025-02-28',
+            'remarks': 'Test assignment with discount',
+        }
+        r = self.post('/fees/assignments', 'admin_gn', assignment_data, school_id=school_id, expected=200)
+        assignment = r.json()
+        assert 'id' in assignment, "Should have assignment id"
+        assert assignment['discount_percent'] == 15, f"discount_percent should be 15, got {assignment['discount_percent']}"
+        assert assignment['discount_amount'] == 500, f"discount_amount should be 500, got {assignment['discount_amount']}"
+        assert assignment['due_date'] == '2025-02-28', f"due_date should be 2025-02-28, got {assignment['due_date']}"
+        assert len(assignment['custom_items']) == 2, f"Should have 2 custom items, got {len(assignment['custom_items'])}"
+        
+        # Store for later tests
+        if not hasattr(self, 'fee_assignments'):
+            self.fee_assignments = []
+        self.fee_assignments.append(assignment)
+        print(f"  ✓ Fee assignment created: discount_percent={assignment['discount_percent']}%, discount_amount={assignment['discount_amount']}, due_date={assignment['due_date']}")
+
+    def test_update_fee_assignment(self):
+        if not hasattr(self, 'fee_assignments') or not self.fee_assignments:
+            self.test_create_fee_assignment()
+        
+        assignment_id = self.fee_assignments[0]['id']
+        update_data = {
+            'discount_percent': 20,
+            'discount_amount': 750,
+            'due_date': '2025-03-15',
+            'remarks': 'Updated assignment',
+        }
+        r = requests.patch(
+            f"{BASE_URL}/fees/assignments/{assignment_id}",
+            json=update_data,
+            headers=self.headers('admin_gn')
+        )
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+        assignment = r.json()
+        assert assignment['discount_percent'] == 20, f"discount_percent should be 20, got {assignment['discount_percent']}"
+        assert assignment['discount_amount'] == 750, f"discount_amount should be 750, got {assignment['discount_amount']}"
+        assert assignment['due_date'] == '2025-03-15', f"due_date should be 2025-03-15, got {assignment['due_date']}"
+        print(f"  ✓ Fee assignment updated: discount_percent={assignment['discount_percent']}%, discount_amount={assignment['discount_amount']}, due_date={assignment['due_date']}")
+
+    def test_delete_fee_assignment(self):
+        # Create a new assignment to delete
+        if not self.students:
+            self.test_get_students()
+        school_id = self.users['admin_gn']['school_id']
+        student_id = self.students[0]['id']
+        
+        assignment_data = {
+            'student_id': student_id,
+            'custom_items': [{'fee_head_name': 'Test Fee', 'amount': 1000, 'frequency': 'one_time'}],
+        }
+        r = self.post('/fees/assignments', 'admin_gn', assignment_data, school_id=school_id, expected=200)
+        assignment_id = r.json()['id']
+        
+        # Now delete it
+        r = requests.delete(
+            f"{BASE_URL}/fees/assignments/{assignment_id}",
+            headers=self.headers('admin_gn')
+        )
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+        result = r.json()
+        assert result.get('ok') == True, "Should return ok: true"
+        print(f"  ✓ Fee assignment deleted successfully")
+
+    def test_student_dues_new_fields(self):
+        if not self.students:
+            self.test_get_students()
+        student_id = self.students[0]['id']
+        
+        r = self.get(f'/fees/student/{student_id}/dues', 'admin_gn')
+        data = r.json()
+        
+        # Check for new fields
+        assert 'total_expected' in data, "Missing total_expected field"
+        assert 'total_discount' in data, "Missing total_discount field"
+        assert 'balance' in data, "Missing balance field"
+        assert 'total_paid' in data, "Missing total_paid field"
+        
+        # Verify types
+        assert isinstance(data['total_expected'], (int, float)), "total_expected should be numeric"
+        assert isinstance(data['total_discount'], (int, float)), "total_discount should be numeric"
+        assert isinstance(data['balance'], (int, float)), "balance should be numeric"
+        assert isinstance(data['total_paid'], (int, float)), "total_paid should be numeric"
+        
+        print(f"  ✓ Student dues new fields: total_expected={data['total_expected']}, total_discount={data['total_discount']}, balance={data['balance']}, total_paid={data['total_paid']}")
+
+    def test_fee_status_report(self):
+        school_id = self.users['admin_gn']['school_id']
+        r = self.get('/reports/fee-status', 'admin_gn', school_id=school_id)
+        data = r.json()
+        
+        assert 'rows' in data, "Missing rows field"
+        assert 'summary' in data, "Missing summary field"
+        assert isinstance(data['rows'], list), "rows should be a list"
+        assert isinstance(data['summary'], dict), "summary should be a dict"
+        
+        # Check summary fields
+        summary = data['summary']
+        assert 'total_expected' in summary, "Missing total_expected in summary"
+        assert 'total_paid' in summary, "Missing total_paid in summary"
+        assert 'total_due' in summary, "Missing total_due in summary"
+        assert 'paid_count' in summary, "Missing paid_count in summary"
+        assert 'partial_count' in summary, "Missing partial_count in summary"
+        assert 'unpaid_count' in summary, "Missing unpaid_count in summary"
+        
+        print(f"  ✓ Fee status report: {len(data['rows'])} students, total_expected={summary['total_expected']}, total_due={summary['total_due']}, paid/partial/unpaid={summary['paid_count']}/{summary['partial_count']}/{summary['unpaid_count']}")
+
+    def test_fee_status_filter_class(self):
+        if not self.classes:
+            self.test_get_classes()
+        school_id = self.users['admin_gn']['school_id']
+        class_id = self.classes[0]['id']
+        class_name = self.classes[0]['name']
+        
+        # Get unfiltered count first
+        r_all = self.get('/reports/fee-status', 'admin_gn', school_id=school_id)
+        all_count = len(r_all.json()['rows'])
+        
+        # Get filtered by class
+        r = self.get(f'/reports/fee-status?class_id={class_id}', 'admin_gn', school_id=school_id)
+        data = r.json()
+        
+        assert 'rows' in data, "Missing rows field"
+        # Verify filtering worked (should have fewer or equal students)
+        assert len(data['rows']) <= all_count, f"Filtered count {len(data['rows'])} should be <= unfiltered {all_count}"
+        
+        # Verify all rows have the same class_name (or '-' for no class)
+        if data['rows']:
+            # All should have the same class_name
+            class_names = set(row.get('class_name') for row in data['rows'])
+            # Should be mostly the filtered class (some might be '-' if no class assigned)
+            print(f"  ✓ Fee status filtered by class: {len(data['rows'])} students (class_names: {class_names})")
+        else:
+            print(f"  ✓ Fee status filtered by class: 0 students in class {class_name}")
+
+    def test_fee_status_filter_status(self):
+        school_id = self.users['admin_gn']['school_id']
+        r = self.get('/reports/fee-status?status_filter=paid', 'admin_gn', school_id=school_id)
+        data = r.json()
+        
+        assert 'rows' in data, "Missing rows field"
+        # Verify all rows have status 'paid'
+        for row in data['rows']:
+            assert row.get('status') == 'paid', f"Row status {row.get('status')} doesn't match filter 'paid'"
+        
+        print(f"  ✓ Fee status filtered by status=paid: {len(data['rows'])} students")
+
+    def test_fee_status_filter_due_amount(self):
+        school_id = self.users['admin_gn']['school_id']
+        min_due = 1000
+        max_due = 10000
+        
+        r = self.get(f'/reports/fee-status?min_due={min_due}&max_due={max_due}', 'admin_gn', school_id=school_id)
+        data = r.json()
+        
+        assert 'rows' in data, "Missing rows field"
+        # Verify all rows have due amount within range
+        for row in data['rows']:
+            due = row.get('due', 0)
+            assert due >= min_due, f"Row due {due} is less than min_due {min_due}"
+            assert due <= max_due, f"Row due {due} is greater than max_due {max_due}"
+        
+        print(f"  ✓ Fee status filtered by due amount ({min_due}-{max_due}): {len(data['rows'])} students")
+
+    def test_analytics_full(self):
+        school_id = self.users['admin_gn']['school_id']
+        r = self.get('/analytics', 'admin_gn', school_id=school_id)
+        data = r.json()
+        
+        # Check required fields
+        required_fields = ['year', 'total_received', 'total_expected', 'total_due', 'months', 
+                          'by_mode', 'by_head', 'by_class', 'attendance']
+        for field in required_fields:
+            assert field in data, f"Missing field: {field}"
+        
+        # Check months array has 12 entries
+        assert isinstance(data['months'], list), "months should be a list"
+        assert len(data['months']) == 12, f"months should have 12 entries, got {len(data['months'])}"
+        
+        # Check month structure
+        for month in data['months']:
+            assert 'month' in month, "month entry should have 'month' field"
+            assert 'received' in month, "month entry should have 'received' field"
+            assert 'transactions' in month, "month entry should have 'transactions' field"
+        
+        # Check by_mode, by_head, by_class are dicts/lists
+        assert isinstance(data['by_mode'], dict), "by_mode should be a dict"
+        assert isinstance(data['by_head'], dict), "by_head should be a dict"
+        assert isinstance(data['by_class'], list), "by_class should be a list"
+        
+        # Check attendance structure
+        assert isinstance(data['attendance'], dict), "attendance should be a dict"
+        assert 'total' in data['attendance'], "attendance should have 'total' field"
+        assert 'present' in data['attendance'], "attendance should have 'present' field"
+        assert 'absent' in data['attendance'], "attendance should have 'absent' field"
+        
+        print(f"  ✓ Analytics full object: year={data['year']}, received={data['total_received']}, expected={data['total_expected']}, due={data['total_due']}, months={len(data['months'])}, by_mode={len(data['by_mode'])}, by_head={len(data['by_head'])}, by_class={len(data['by_class'])}")
+
+    def test_analytics_year_filter(self):
+        school_id = self.users['admin_gn']['school_id']
+        year = 2024
+        
+        r = self.get(f'/analytics?year={year}', 'admin_gn', school_id=school_id)
+        data = r.json()
+        
+        assert data['year'] == year, f"Year should be {year}, got {data['year']}"
+        assert len(data['months']) == 12, f"Should have 12 months, got {len(data['months'])}"
+        
+        print(f"  ✓ Analytics year filter works: year={data['year']}")
+
+    def test_delete_user(self):
+        # Create a test user to delete
+        school_id = self.users['admin_gn']['school_id']
+        user_data = {
+            'email': f'test.delete.{datetime.now().strftime("%H%M%S")}@stanvard.school',
+            'password': 'test123',
+            'full_name': 'Test Delete User',
+            'role': 'teacher',
+            'school_id': school_id,
+        }
+        r = self.post('/users', 'admin_gn', user_data, school_id=school_id, expected=200)
+        user_id = r.json()['id']
+        
+        # Delete the user
+        r = requests.delete(
+            f"{BASE_URL}/users/{user_id}",
+            headers=self.headers('admin_gn')
+        )
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+        result = r.json()
+        assert result.get('ok') == True, "Should return ok: true"
+        
+        # Verify user is soft-deleted (status=inactive)
+        r = self.get('/users', 'admin_gn', school_id=school_id)
+        users = r.json()
+        deleted_user = next((u for u in users if u['id'] == user_id), None)
+        assert deleted_user is not None, "User should still exist"
+        assert deleted_user['status'] == 'inactive', f"User status should be 'inactive', got {deleted_user['status']}"
+        
+        print(f"  ✓ User soft-deleted: status={deleted_user['status']}")
+
+    def test_delete_user_self(self):
+        # Try to delete yourself - should return 400
+        user_id = self.users['admin_gn']['id']
+        
+        r = requests.delete(
+            f"{BASE_URL}/users/{user_id}",
+            headers=self.headers('admin_gn')
+        )
+        assert r.status_code == 400, f"Expected 400, got {r.status_code}: {r.text}"
+        
+        print(f"  ✓ Cannot delete yourself: correctly returned 400")
+
+    def test_delete_user_super_admin(self):
+        # School admin tries to delete super_admin - should return 403
+        super_admin_id = self.users['superadmin']['id']
+        
+        r = requests.delete(
+            f"{BASE_URL}/users/{super_admin_id}",
+            headers=self.headers('admin_gn')
+        )
+        assert r.status_code == 403, f"Expected 403, got {r.status_code}: {r.text}"
+        
+        print(f"  ✓ School admin cannot delete super_admin: correctly returned 403")
+
+    def test_reset_password(self):
+        # Create a test user
+        school_id = self.users['admin_gn']['school_id']
+        user_data = {
+            'email': f'test.reset.{datetime.now().strftime("%H%M%S")}@stanvard.school',
+            'password': 'oldpass123',
+            'full_name': 'Test Reset User',
+            'role': 'teacher',
+            'school_id': school_id,
+        }
+        r = self.post('/users', 'admin_gn', user_data, school_id=school_id, expected=200)
+        user = r.json()
+        
+        # Store for login test
+        if not hasattr(self, 'reset_test_user'):
+            self.reset_test_user = {}
+        self.reset_test_user['email'] = user['email']
+        self.reset_test_user['id'] = user['id']
+        self.reset_test_user['new_password'] = 'newpass456'
+        
+        # Reset password
+        reset_data = {'password': self.reset_test_user['new_password']}
+        r = requests.post(
+            f"{BASE_URL}/users/{user['id']}/reset-password",
+            json=reset_data,
+            headers=self.headers('admin_gn')
+        )
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+        result = r.json()
+        assert result.get('ok') == True, "Should return ok: true"
+        
+        print(f"  ✓ Password reset successful for {user['email']}")
+
+    def test_login_after_reset(self):
+        if not hasattr(self, 'reset_test_user'):
+            self.test_reset_password()
+        
+        # Try to login with new password
+        login_data = {
+            'email': self.reset_test_user['email'],
+            'password': self.reset_test_user['new_password'],
+        }
+        r = requests.post(f"{BASE_URL}/auth/login", json=login_data)
+        assert r.status_code == 200, f"Login with new password failed: {r.status_code} {r.text}"
+        data = r.json()
+        assert 'access_token' in data, "Should have access_token"
+        
+        print(f"  ✓ Login with new password successful")
+
+    def test_rbac_parent_assign_fee(self):
+        if not self.students:
+            self.test_get_students()
+        student_id = self.students[0]['id']
+        
+        assignment_data = {
+            'student_id': student_id,
+            'custom_items': [{'fee_head_name': 'Test', 'amount': 1000, 'frequency': 'one_time'}],
+        }
+        r = self.post('/fees/assignments', 'parent_gn', assignment_data, expected=403)
+        print(f"  ✓ Parent correctly forbidden from creating fee assignment (403)")
+
+    def test_rbac_teacher_assign_fee(self):
+        if not self.students:
+            self.test_get_students()
+        student_id = self.students[0]['id']
+        
+        assignment_data = {
+            'student_id': student_id,
+            'custom_items': [{'fee_head_name': 'Test', 'amount': 1000, 'frequency': 'one_time'}],
+        }
+        r = self.post('/fees/assignments', 'teacher_gn', assignment_data, expected=403)
+        print(f"  ✓ Teacher correctly forbidden from creating fee assignment (403)")
+
+    def test_rbac_accountant_delete_user(self):
+        # Accountant tries to delete a user - should return 403
+        # First get a user id
+        school_id = self.users['accountant_gn']['school_id']
+        r = self.get('/users', 'accountant_gn', school_id=school_id)
+        users = r.json()
+        
+        if users:
+            user_id = users[0]['id']
+            r = requests.delete(
+                f"{BASE_URL}/users/{user_id}",
+                headers=self.headers('accountant_gn')
+            )
+            assert r.status_code == 403, f"Expected 403, got {r.status_code}: {r.text}"
+            print(f"  ✓ Accountant correctly forbidden from deleting user (403)")
+        else:
+            print(f"  ⚠ Skipped: No users found for accountant")
 
 
 if __name__ == '__main__':

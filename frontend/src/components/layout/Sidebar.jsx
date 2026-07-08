@@ -4,12 +4,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import {
   LayoutDashboard, Users, GraduationCap, Wallet, Receipt, CalendarCheck,
   BookOpen, CalendarDays, Megaphone, Image, Users2, Bell, FileBarChart,
-  Settings, ShieldCheck, School, ClipboardList, HeartHandshake
+  Settings, ShieldCheck, School, ClipboardList, HeartHandshake, BarChart3
 } from 'lucide-react';
 
 const navFor = {
   super_admin: [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+    { to: '/analytics', icon: BarChart3, label: 'Analytics' },
     { to: '/schools', icon: School, label: 'Schools' },
     { to: '/users', icon: Users, label: 'Users' },
     { to: '/students', icon: GraduationCap, label: 'Students' },
@@ -30,6 +31,8 @@ const navFor = {
   ],
   school_admin: [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+    { to: '/analytics', icon: BarChart3, label: 'Analytics' },
+    { to: '/users', icon: Users, label: 'Users' },
     { to: '/students', icon: GraduationCap, label: 'Students' },
     { to: '/fees', icon: Wallet, label: 'Fee Structures' },
     { to: '/fees/collect', icon: Receipt, label: 'Collect Fee' },
@@ -48,6 +51,7 @@ const navFor = {
   ],
   accountant: [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+    { to: '/analytics', icon: BarChart3, label: 'Analytics' },
     { to: '/fees/collect', icon: Receipt, label: 'Collect Fee' },
     { to: '/receipts', icon: Receipt, label: 'Receipts' },
     { to: '/students', icon: GraduationCap, label: 'Students' },

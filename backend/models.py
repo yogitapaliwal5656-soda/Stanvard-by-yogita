@@ -255,24 +255,50 @@ class FeePlanCreate(BaseModel):
     late_fee_after_day: int = 10
 
 
+class FeeAssignmentItem(BaseModel):
+    fee_head_id: Optional[str] = None
+    fee_head_name: str
+    amount: float
+    frequency: str = 'monthly'
+    due_date: Optional[str] = None  # YYYY-MM-DD
+
+
 class FeeAssignment(BaseDoc):
     school_id: str
     student_id: str
-    fee_plan_id: str
+    fee_plan_id: Optional[str] = None  # null when fully custom
     academic_session: str = '2025-26'
-    custom_amount: Optional[float] = None  # override plan
-    discount_percent: Optional[float] = None
+    custom_items: List[FeeAssignmentItem] = Field(default_factory=list)
+    custom_amount: Optional[float] = None  # override total
+    discount_percent: float = 0.0
+    discount_amount: float = 0.0
+    due_date: Optional[str] = None  # overall due date
     remarks: Optional[str] = None
+    status: str = 'active'
 
 
 class FeeAssignmentCreate(BaseModel):
     school_id: Optional[str] = None
     student_id: str
-    fee_plan_id: str
+    fee_plan_id: Optional[str] = None
     academic_session: str = '2025-26'
+    custom_items: List[FeeAssignmentItem] = Field(default_factory=list)
+    custom_amount: Optional[float] = None
+    discount_percent: float = 0.0
+    discount_amount: float = 0.0
+    due_date: Optional[str] = None
+    remarks: Optional[str] = None
+
+
+class FeeAssignmentUpdate(BaseModel):
+    fee_plan_id: Optional[str] = None
+    custom_items: Optional[List[FeeAssignmentItem]] = None
     custom_amount: Optional[float] = None
     discount_percent: Optional[float] = None
+    discount_amount: Optional[float] = None
+    due_date: Optional[str] = None
     remarks: Optional[str] = None
+    status: Optional[str] = None
 
 
 # ---------- PAYMENT / RECEIPT ----------

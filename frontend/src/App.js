@@ -27,6 +27,7 @@ import AuditLogs from '@/pages/AuditLogs';
 import Settings from '@/pages/Settings';
 import Schools from '@/pages/Schools';
 import Users from '@/pages/Users';
+import Analytics from '@/pages/Analytics';
 
 import ParentHome from '@/pages/parent/ParentHome';
 import ParentPay from '@/pages/parent/ParentPay';
@@ -70,6 +71,7 @@ function App() {
             <Route path="/settings" element={<ProtectedRoute roles={['super_admin', 'school_admin']}><Settings /></ProtectedRoute>} />
             <Route path="/schools" element={<ProtectedRoute roles={['super_admin']}><Schools /></ProtectedRoute>} />
             <Route path="/users" element={<ProtectedRoute roles={['super_admin', 'school_admin']}><Users /></ProtectedRoute>} />
+            <Route path="/analytics" element={<ProtectedRoute roles={['super_admin', 'school_admin', 'accountant']}><Analytics /></ProtectedRoute>} />
 
             {/* Parent portal */}
             <Route path="/parent" element={<ProtectedRoute roles={['parent']}><ParentHome /></ProtectedRoute>} />

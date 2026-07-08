@@ -32,9 +32,11 @@ export default function ParentHome() {
     })();
   }, [user]);
 
-  const totalDue = dues?.dues?.reduce((s, d) => s + d.amount, 0) || 0;
+  const totalExpected = dues?.total_expected || 0;
+  const totalDiscount = dues?.total_discount || 0;
   const paidTotal = dues?.total_paid || 0;
-  const balance = Math.max(totalDue - paidTotal, 0);
+  const balance = dues?.balance || 0;
+  const nextDueDate = (dues?.dues || []).map((d) => d.due_date).filter(Boolean).sort()[0];
   const presentPct = attendance.length ? Math.round((attendance.filter((a) => a.status === 'present').length / attendance.length) * 100) : 0;
 
   return (
@@ -62,7 +64,8 @@ export default function ParentHome() {
             <div>
               <div className="text-xs uppercase text-[hsl(var(--primary))] font-medium tracking-wide">Balance Due</div>
               <div className="h-font text-2xl font-semibold mt-1">{money(balance)}</div>
-              <div className="text-xs text-muted-foreground mt-1">Paid so far: {money(paidTotal)}</div>
+              <div className="text-xs text-muted-foreground mt-1">Paid so far: {money(paidTotal)}{totalDiscount > 0 && ` • Discount: ${money(totalDiscount)}`}</div>
+              {nextDueDate && <div className="text-xs text-[#B45309] mt-1 font-medium">Next due: {nextDueDate}</div>}
             </div>
             <Wallet className="h-5 w-5 text-[hsl(var(--primary))]" />
           </div>

@@ -1,42 +1,46 @@
 [
   {
-    "content": "Phase 1: Core POC complete",
+    "content": "Backend: extend fee assignment + endpoints (discount, due date)",
     "status": "completed"
   },
   {
-    "content": "Phase 2: Design guidelines received",
+    "content": "Backend: analytics endpoint",
     "status": "completed"
   },
   {
-    "content": "Phase 2: Install backend + frontend dependencies",
+    "content": "Backend: enhanced reports endpoint",
     "status": "completed"
   },
   {
-    "content": "Phase 2: Build multi-tenant backend (auth, schools, students, fees, payments, attendance, etc.)",
+    "content": "Backend: user DELETE + reset password endpoints",
     "status": "completed"
   },
   {
-    "content": "Phase 2: Seed 3 schools + demo users + sample students/classes/fees/attendance",
+    "content": "Frontend: Edit Student dialog",
     "status": "completed"
   },
   {
-    "content": "Phase 2: Build frontend - core (index.css, App.js, contexts, layout, login, dashboard)",
+    "content": "Frontend: Assign Fee dialog with discount + due date",
     "status": "completed"
   },
   {
-    "content": "Phase 2: Build frontend - modules (students, fees, attendance, homework, etc.)",
+    "content": "Frontend: Analytics dashboard page",
     "status": "completed"
   },
   {
-    "content": "Phase 2: Build frontend - parent portal",
+    "content": "Frontend: Enhanced Reports page with filters",
     "status": "completed"
   },
   {
-    "content": "Phase 2: End-to-end testing with testing_agent_v3 (100% pass)",
+    "content": "Frontend: Users page with edit/delete/reset password",
     "status": "completed"
   },
   {
-    "content": "Phase 2: Fix all issues found in testing (0 issues found)",
+    "content": "Frontend: Parent portal shows due dates",
     "status": "completed"
+  },
+  {
+    "content": "End-to-end testing with testing_agent_v3",
+    "status": "in_progress"
   }
 ]

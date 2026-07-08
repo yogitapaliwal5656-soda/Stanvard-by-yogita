@@ -11,10 +11,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
-import { Search, Plus, GraduationCap, Filter } from 'lucide-react';
+import { Search, Plus, GraduationCap, Filter, Pencil } from 'lucide-react';
 import { useSchool } from '@/contexts/SchoolContext';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import { EditStudentDialog } from '@/components/EditStudentDialog';
 
 export default function StudentsPage() {
   const { activeSchoolId } = useSchool();
@@ -27,6 +28,7 @@ export default function StudentsPage() {
   const [sectionFilter, setSectionFilter] = useState('all');
   const [loading, setLoading] = useState(false);
   const [openAdd, setOpenAdd] = useState(false);
+  const [editStudent, setEditStudent] = useState(null);
 
   const load = useCallback(async () => {
     if (!activeSchoolId) return;
@@ -111,11 +113,12 @@ export default function StudentsPage() {
                 <TableHead className="text-xs uppercase tracking-wide">Guardian</TableHead>
                 <TableHead className="text-xs uppercase tracking-wide">Phone</TableHead>
                 <TableHead className="text-xs uppercase tracking-wide">Status</TableHead>
+                {canEdit && <TableHead className="text-xs uppercase tracking-wide text-right">Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {students.length === 0 && !loading && (
-                <TableRow><TableCell colSpan={6} className="py-8 text-center text-muted-foreground text-sm">No students found.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={canEdit ? 7 : 6} className="py-8 text-center text-muted-foreground text-sm">No students found.</TableCell></TableRow>
               )}
               {students.map((s) => (
                 <TableRow key={s.id} className="hover:bg-secondary/40 cursor-pointer" onClick={() => nav(`/students/${s.id}`)}>
@@ -140,6 +143,11 @@ export default function StudentsPage() {
                       {s.status || 'active'}
                     </Badge>
                   </TableCell>
+                  {canEdit && (
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                      <Button size="sm" variant="ghost" onClick={() => setEditStudent(s)} data-testid={`student-edit-${s.id}`}><Pencil className="h-3.5 w-3.5" /></Button>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
@@ -148,6 +156,7 @@ export default function StudentsPage() {
       </Card>
 
       <AddStudentDialog open={openAdd} onOpenChange={setOpenAdd} classes={classes} onSaved={load} />
+      <EditStudentDialog open={!!editStudent} onOpenChange={(v) => !v && setEditStudent(null)} student={editStudent} classes={classes} onSaved={load} />
     </AppShell>
   );
 }

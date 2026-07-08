@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { AppShell } from '@/components/layout/AppShell';
 import { api, money } from '@/lib/api';
@@ -8,32 +8,57 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Wallet, Receipt as ReceiptIcon } from 'lucide-react';
+import { ArrowLeft, Wallet, Receipt as ReceiptIcon, Pencil, Plus, Trash2 } from 'lucide-react';
+import { EditStudentDialog } from '@/components/EditStudentDialog';
+import { AssignFeeDialog } from '@/components/AssignFeeDialog';
+import { useAuth } from '@/contexts/AuthContext';
+import { toast } from 'sonner';
 
 export default function StudentDetail() {
   const { id } = useParams();
   const nav = useNavigate();
+  const { user } = useAuth();
   const [student, setStudent] = useState(null);
   const [dues, setDues] = useState(null);
   const [attendance, setAttendance] = useState([]);
   const [payments, setPayments] = useState([]);
+  const [classes, setClasses] = useState([]);
+  const [feePlans, setFeePlans] = useState([]);
+  const [feeHeads, setFeeHeads] = useState([]);
+  const [editOpen, setEditOpen] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [editingAssignment, setEditingAssignment] = useState(null);
 
-  useEffect(() => {
-    (async () => {
-      const { data: s } = await api.get(`/students/${id}`);
-      setStudent(s);
-      const [{ data: d }, { data: a }, { data: p }] = await Promise.all([
-        api.get(`/fees/student/${id}/dues`),
-        api.get('/attendance', { params: { student_id: id } }),
-        api.get('/payments', { params: { student_id: id } }),
-      ]);
-      setDues(d); setAttendance(a); setPayments(p);
-    })();
+  const canEdit = ['super_admin', 'school_admin'].includes(user?.role);
+
+  const load = useCallback(async () => {
+    const { data: s } = await api.get(`/students/${id}`);
+    setStudent(s);
+    const [{ data: d }, { data: a }, { data: p }, { data: c }, { data: fp }, { data: fh }] = await Promise.all([
+      api.get(`/fees/student/${id}/dues`),
+      api.get('/attendance', { params: { student_id: id } }),
+      api.get('/payments', { params: { student_id: id } }),
+      api.get('/classes'),
+      api.get('/fees/plans'),
+      api.get('/fees/heads'),
+    ]);
+    setDues(d); setAttendance(a); setPayments(p); setClasses(c); setFeePlans(fp); setFeeHeads(fh);
   }, [id]);
+
+  useEffect(() => { load(); }, [load]);
 
   if (!student) return <AppShell><div className="text-sm text-muted-foreground">Loading…</div></AppShell>;
 
-  const paidTotal = dues?.total_paid || 0;
+  const deleteAssignment = async (aid) => {
+    if (!window.confirm('Remove this fee assignment?')) return;
+    await api.delete(`/fees/assignments/${aid}`);
+    toast.success('Assignment removed');
+    load();
+  };
+
+  const openAssign = (assignment = null) => { setEditingAssignment(assignment); setAssignOpen(true); };
+
+  const classMap = Object.fromEntries(classes.map((c) => [c.id, c.name]));
 
   return (
     <AppShell>
@@ -55,24 +80,44 @@ export default function StudentDetail() {
                 <Badge variant="secondary">{student.gender}</Badge>
                 {student.category && <Badge variant="secondary">{student.category}</Badge>}
                 {student.blood_group && <Badge variant="secondary">Blood: {student.blood_group}</Badge>}
+                <Badge variant="secondary">{classMap[student.class_id] || '-'} {student.section && `• ${student.section}`}</Badge>
               </div>
               <div className="text-xs text-muted-foreground mt-2">
                 DOB: {student.dob || '—'} • Admitted: {student.admission_date || '—'}
               </div>
             </div>
           </div>
-          <div className="flex gap-2">
-            <Button data-testid="student-collect-fee" onClick={() => nav(`/fees/collect?student=${student.id}`)} className="gap-2">
-              <Wallet className="h-4 w-4" /> Collect Fee
-            </Button>
+          <div className="flex flex-wrap gap-2">
+            {canEdit && (
+              <Button variant="outline" onClick={() => setEditOpen(true)} className="gap-2" data-testid="student-edit-button">
+                <Pencil className="h-4 w-4" /> Edit Details
+              </Button>
+            )}
+            {canEdit && (
+              <Button variant="outline" onClick={() => openAssign(null)} className="gap-2" data-testid="student-assign-fee-button">
+                <Plus className="h-4 w-4" /> Assign Fee
+              </Button>
+            )}
+            {['super_admin', 'school_admin', 'accountant'].includes(user?.role) && (
+              <Button onClick={() => nav(`/fees/collect?student=${student.id}`)} className="gap-2" data-testid="student-collect-fee">
+                <Wallet className="h-4 w-4" /> Collect Fee
+              </Button>
+            )}
           </div>
         </div>
       </Card>
 
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+        <Card className="p-4 border-border"><div className="text-xs uppercase text-muted-foreground">Total Expected</div><div className="h-font text-xl font-semibold tabular-nums">{money(dues?.total_expected || 0)}</div></Card>
+        <Card className="p-4 border-border bg-[#E6F6F4]"><div className="text-xs uppercase text-[#0F766E]">Total Paid</div><div className="h-font text-xl font-semibold tabular-nums">{money(dues?.total_paid || 0)}</div></Card>
+        <Card className="p-4 border-border bg-[#FFF3E0]"><div className="text-xs uppercase text-[#B45309]">Discount</div><div className="h-font text-xl font-semibold tabular-nums">{money(dues?.total_discount || 0)}</div></Card>
+        <Card className="p-4 border-border bg-[#FEE4E2]"><div className="text-xs uppercase text-[#B42318]">Balance Due</div><div className="h-font text-xl font-semibold tabular-nums">{money(dues?.balance || 0)}</div></Card>
+      </div>
+
       <Tabs defaultValue="info" data-testid="student-profile-tabs">
         <TabsList>
           <TabsTrigger value="info">Information</TabsTrigger>
-          <TabsTrigger value="fees" data-testid="student-profile-fees-tab">Fees</TabsTrigger>
+          <TabsTrigger value="fees" data-testid="student-profile-fees-tab">Fee Assignments</TabsTrigger>
           <TabsTrigger value="attendance" data-testid="student-profile-attendance-tab">Attendance</TabsTrigger>
           <TabsTrigger value="payments">Payment History</TabsTrigger>
         </TabsList>
@@ -83,6 +128,8 @@ export default function StudentDetail() {
               ['Phone', student.phone], ['Email', student.email], ['Address', student.address],
               ['Religion', student.religion], ['Transport', student.transport_route],
               ['Previous School', student.previous_school], ['Medical', student.medical_info],
+              ['Scholarship', student.scholarship], ['Fee Category', student.fee_category],
+              ['Remarks', student.remarks],
             ].map(([k, v]) => (
               <div key={k}>
                 <div className="text-xs uppercase text-muted-foreground tracking-wide">{k}</div>
@@ -94,27 +141,52 @@ export default function StudentDetail() {
         <TabsContent value="fees">
           <Card className="p-6 border-border">
             <div className="flex items-center justify-between mb-4">
-              <div>
-                <div className="text-xs uppercase text-muted-foreground tracking-wide">Total Paid</div>
-                <div className="h-font text-2xl font-semibold">{money(paidTotal)}</div>
-              </div>
-              <Button variant="outline" onClick={() => nav(`/fees/collect?student=${student.id}`)} className="gap-2">
-                <Wallet className="h-4 w-4" /> Collect Fee
-              </Button>
+              <div className="text-sm font-medium">{dues?.assignments?.length || 0} fee assignments</div>
+              {canEdit && <Button onClick={() => openAssign(null)} className="gap-2" size="sm"><Plus className="h-3.5 w-3.5" /> New Assignment</Button>}
             </div>
-            <div className="text-sm font-medium mb-2">Fee Plan Items</div>
-            <Table>
-              <TableHeader><TableRow><TableHead>Fee Head</TableHead><TableHead>Frequency</TableHead><TableHead className="text-right">Amount</TableHead></TableRow></TableHeader>
-              <TableBody>
-                {(dues?.dues || []).map((d, i) => (
-                  <TableRow key={i}>
-                    <TableCell>{d.fee_head_name}</TableCell>
-                    <TableCell className="capitalize">{d.frequency}</TableCell>
-                    <TableCell className="text-right tabular-nums">{money(d.amount)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <div className="space-y-3">
+              {(dues?.assignments || []).length === 0 && (
+                <div className="text-sm text-muted-foreground py-6 text-center">No fee assignments yet. Click "New Assignment" to add.</div>
+              )}
+              {(dues?.assignments || []).map((a) => {
+                const plan = feePlans.find((p) => p.id === a.fee_plan_id);
+                const items = a.custom_items?.length ? a.custom_items : (plan?.items || []);
+                const total = items.reduce((s, it) => s + (it.amount || 0), 0);
+                return (
+                  <Card key={a.id} className="p-4 border-border">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-medium">{plan ? plan.name : 'Custom Assignment'}</div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {items.length} items • Session {a.academic_session}
+                          {a.due_date && ` • Due: ${a.due_date}`}
+                          {a.discount_percent > 0 && ` • ${a.discount_percent}% discount`}
+                          {a.discount_amount > 0 && ` • ₹${a.discount_amount} discount`}
+                        </div>
+                        {a.remarks && <div className="text-xs text-muted-foreground mt-1">{a.remarks}</div>}
+                      </div>
+                      <div className="text-right">
+                        <div className="tabular-nums font-semibold">{money(total)}</div>
+                        {canEdit && (
+                          <div className="flex gap-1 mt-2">
+                            <Button size="sm" variant="ghost" onClick={() => openAssign(a)}><Pencil className="h-3 w-3" /></Button>
+                            <Button size="sm" variant="ghost" onClick={() => deleteAssignment(a.id)}><Trash2 className="h-3 w-3 text-destructive" /></Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-3 border-t border-border pt-2 space-y-1">
+                      {items.slice(0, 6).map((it, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs">
+                          <span>{it.fee_head_name} <span className="text-muted-foreground">({it.frequency})</span></span>
+                          <span className="tabular-nums">{money(it.amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
           </Card>
         </TabsContent>
         <TabsContent value="attendance">
@@ -154,7 +226,13 @@ export default function StudentDetail() {
                     <TableCell>{(p.paid_at || '').slice(0, 10)}</TableCell>
                     <TableCell className="capitalize">{String(p.payment_mode).replace('_', ' ')}</TableCell>
                     <TableCell className="text-right font-semibold tabular-nums">{money(p.total_paid)}</TableCell>
-                    <TableCell><Button size="sm" variant="outline" onClick={() => window.open(`${api.defaults.baseURL}/payments/${p.id}/receipt.pdf?token=${localStorage.getItem('stv_token')}`, '_blank')} className="gap-1"><ReceiptIcon className="h-3.5 w-3.5" /> PDF</Button></TableCell>
+                    <TableCell>
+                      <Button size="sm" variant="outline" onClick={async () => {
+                        const resp = await api.get(`/payments/${p.id}/receipt.pdf`, { responseType: 'blob' });
+                        const url = window.URL.createObjectURL(new Blob([resp.data], { type: 'application/pdf' }));
+                        window.open(url, '_blank');
+                      }} className="gap-1"><ReceiptIcon className="h-3.5 w-3.5" /> PDF</Button>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -162,6 +240,9 @@ export default function StudentDetail() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <EditStudentDialog open={editOpen} onOpenChange={setEditOpen} student={student} classes={classes} onSaved={load} />
+      <AssignFeeDialog open={assignOpen} onOpenChange={setAssignOpen} student={student} feePlans={feePlans} feeHeads={feeHeads} existingAssignment={editingAssignment} onSaved={load} />
     </AppShell>
   );
 }

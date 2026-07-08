@@ -30,6 +30,7 @@ from models import (
     Student, StudentCreate, StudentUpdate,
     ClassRoom, ClassCreate,
     FeeHead, FeeHeadCreate, FeePlan, FeePlanCreate, FeeAssignment, FeeAssignmentCreate,
+    FeeAssignmentUpdate, FeeAssignmentItem,
     Payment, PaymentCreate, PaymentLineItem,
     RazorpayOrderRequest, RazorpayVerifyRequest,
     AttendanceRecord, AttendanceBulkMark,
@@ -440,29 +441,103 @@ async def student_dues(student_id: str, request: Request, current=Depends(get_cu
         raise HTTPException(403, 'Forbidden')
     assignments = await fee_assignments_col.find({'student_id': student_id}, {'_id': 0}).to_list(50)
     dues = []
+    total_expected = 0.0
+    total_discount = 0.0
     for a in assignments:
-        plan = await fee_plans_col.find_one({'id': a['fee_plan_id']}, {'_id': 0})
-        if not plan:
-            continue
-        for item in plan.get('items', []):
-            dues.append({
-                'fee_head_id': item['fee_head_id'],
-                'fee_head_name': item['fee_head_name'],
-                'amount': item['amount'],
-                'frequency': item['frequency'],
-                'installments': item.get('installments', 1),
-                'plan_id': plan['id'],
-            })
-    # payments summary
+        # Custom items take priority over plan
+        items_for_a = []
+        if a.get('custom_items'):
+            items_for_a = a['custom_items']
+        elif a.get('fee_plan_id'):
+            plan = await fee_plans_col.find_one({'id': a['fee_plan_id']}, {'_id': 0})
+            if plan:
+                items_for_a = plan.get('items', [])
+        for item in items_for_a:
+            entry = {
+                'fee_head_id': item.get('fee_head_id'),
+                'fee_head_name': item.get('fee_head_name'),
+                'amount': item.get('amount', 0),
+                'frequency': item.get('frequency', 'monthly'),
+                'installments': item.get('installments', 1) if 'installments' in item else 1,
+                'due_date': item.get('due_date') or a.get('due_date'),
+                'assignment_id': a['id'],
+                'plan_id': a.get('fee_plan_id'),
+            }
+            dues.append(entry)
+            total_expected += entry['amount']
+        # Apply assignment-level discount
+        if a.get('discount_percent'):
+            total_discount += total_expected * (a['discount_percent'] / 100)
+        if a.get('discount_amount'):
+            total_discount += a['discount_amount']
+    # payments
     payments = await payments_col.find({'student_id': student_id, 'status': 'success'}, {'_id': 0}).to_list(500)
     total_paid = sum(p.get('total_paid', 0) for p in payments)
+    balance = max(total_expected - total_discount - total_paid, 0)
     return {
         'student': student,
         'dues': dues,
         'assignments': assignments,
+        'total_expected': total_expected,
+        'total_discount': total_discount,
         'total_paid': total_paid,
+        'balance': balance,
         'recent_payments': sorted(payments, key=lambda x: x.get('paid_at', ''), reverse=True)[:10],
     }
+
+
+# ---------- FEE ASSIGNMENTS (per-student) ----------
+@api.get('/fees/assignments')
+async def list_assignments(request: Request, current=Depends(get_current_user),
+                           school_id: Optional[str] = None,
+                           student_id: Optional[str] = None):
+    sid = resolve_school_id(current, school_id, request.headers.get('X-School-Id'))
+    q: Dict[str, Any] = {'school_id': sid}
+    if student_id:
+        q['student_id'] = student_id
+    return await fee_assignments_col.find(q, {'_id': 0}).to_list(500)
+
+
+@api.post('/fees/assignments', dependencies=[Depends(require_roles('super_admin', 'school_admin'))])
+async def create_assignment(body: FeeAssignmentCreate, request: Request, current=Depends(get_current_user)):
+    sid = resolve_school_id(current, body.school_id, request.headers.get('X-School-Id'))
+    a = FeeAssignment(
+        school_id=sid, student_id=body.student_id, fee_plan_id=body.fee_plan_id,
+        academic_session=body.academic_session,
+        custom_items=body.custom_items or [],
+        custom_amount=body.custom_amount,
+        discount_percent=body.discount_percent or 0.0,
+        discount_amount=body.discount_amount or 0.0,
+        due_date=body.due_date, remarks=body.remarks,
+    )
+    await fee_assignments_col.insert_one(a.model_dump())
+    await log_audit(action='fee_assignment.create', current_user=current, school_id=sid,
+                    entity_type='fee_assignment', entity_id=a.id,
+                    details={'student_id': body.student_id, 'discount_percent': body.discount_percent,
+                             'discount_amount': body.discount_amount, 'due_date': body.due_date})
+    return a.model_dump()
+
+
+@api.patch('/fees/assignments/{assignment_id}', dependencies=[Depends(require_roles('super_admin', 'school_admin'))])
+async def update_assignment(assignment_id: str, body: FeeAssignmentUpdate, current=Depends(get_current_user)):
+    upd = body.model_dump(exclude_none=True)
+    upd['updated_at'] = now_iso()
+    r = await fee_assignments_col.update_one({'id': assignment_id}, {'$set': upd})
+    if not r.matched_count:
+        raise HTTPException(404, 'Assignment not found')
+    await log_audit(action='fee_assignment.update', current_user=current,
+                    entity_type='fee_assignment', entity_id=assignment_id, details=upd)
+    return await fee_assignments_col.find_one({'id': assignment_id}, {'_id': 0})
+
+
+@api.delete('/fees/assignments/{assignment_id}', dependencies=[Depends(require_roles('super_admin', 'school_admin'))])
+async def delete_assignment(assignment_id: str, current=Depends(get_current_user)):
+    r = await fee_assignments_col.delete_one({'id': assignment_id})
+    if not r.deleted_count:
+        raise HTTPException(404, 'Assignment not found')
+    await log_audit(action='fee_assignment.delete', current_user=current,
+                    entity_type='fee_assignment', entity_id=assignment_id)
+    return {'ok': True}
 
 
 # =====================================================
@@ -1137,6 +1212,257 @@ async def update_settings(payload: Dict[str, Any], request: Request, current=Dep
     await log_audit(action='settings.update', current_user=current, school_id=sid,
                     entity_type='settings', details=payload)
     return await settings_col.find_one({'school_id': sid}, {'_id': 0})
+
+
+# =====================================================
+# USER DELETE + PASSWORD RESET
+# =====================================================
+@api.delete('/users/{user_id}', dependencies=[Depends(require_roles('super_admin', 'school_admin'))])
+async def delete_user(user_id: str, current=Depends(get_current_user)):
+    target = await users_col.find_one({'id': user_id}, {'_id': 0})
+    if not target:
+        raise HTTPException(404, 'User not found')
+    if current['role'] == 'school_admin':
+        if target.get('school_id') != current.get('school_id') or target.get('role') == 'super_admin':
+            raise HTTPException(403, 'Cannot delete this user')
+    if target['id'] == current['id']:
+        raise HTTPException(400, 'Cannot delete yourself')
+    await users_col.update_one({'id': user_id}, {'$set': {'status': 'inactive', 'updated_at': now_iso()}})
+    await log_audit(action='user.delete', current_user=current,
+                    entity_type='user', entity_id=user_id, details={'email': target.get('email')})
+    return {'ok': True}
+
+
+@api.post('/users/{user_id}/reset-password', dependencies=[Depends(require_roles('super_admin', 'school_admin'))])
+async def reset_password(user_id: str, payload: Dict[str, str], current=Depends(get_current_user)):
+    new_pw = payload.get('password')
+    if not new_pw or len(new_pw) < 6:
+        raise HTTPException(400, 'Password must be at least 6 characters')
+    target = await users_col.find_one({'id': user_id}, {'_id': 0})
+    if not target:
+        raise HTTPException(404, 'User not found')
+    if current['role'] == 'school_admin' and target.get('school_id') != current.get('school_id'):
+        raise HTTPException(403, 'Forbidden')
+    await users_col.update_one({'id': user_id}, {'$set': {'password_hash': hash_password(new_pw), 'updated_at': now_iso()}})
+    await log_audit(action='user.reset_password', current_user=current,
+                    entity_type='user', entity_id=user_id, details={'email': target.get('email')})
+    return {'ok': True}
+
+
+# =====================================================
+# ANALYTICS
+# =====================================================
+@api.get('/analytics')
+async def analytics(request: Request, current=Depends(get_current_user),
+                   school_id: Optional[str] = None, year: Optional[int] = None):
+    sid = resolve_school_id(current, school_id, request.headers.get('X-School-Id'))
+    year = year or datetime.now().year
+    year_start = f'{year}-01-01'
+    year_end = f'{year}-12-31T23:59:59'
+
+    # All payments for the year
+    payments = await payments_col.find({
+        'school_id': sid, 'status': 'success',
+        'paid_at': {'$gte': year_start, '$lte': year_end}
+    }, {'_id': 0}).to_list(20000)
+
+    # Monthly breakdown (Jan..Dec)
+    months = [{'month': datetime(year, m, 1).strftime('%b'),
+               'received': 0.0, 'transactions': 0, 'discount': 0.0, 'late_fee': 0.0}
+              for m in range(1, 13)]
+    by_mode = {}
+    by_head = {}
+    for p in payments:
+        try:
+            paid_month = int((p.get('paid_at') or '')[5:7])
+            months[paid_month - 1]['received'] += p.get('total_paid', 0)
+            months[paid_month - 1]['transactions'] += 1
+            months[paid_month - 1]['discount'] += p.get('discount', 0)
+            months[paid_month - 1]['late_fee'] += p.get('late_fee', 0)
+        except Exception:
+            pass
+        mode = p.get('payment_mode', 'cash')
+        by_mode[mode] = by_mode.get(mode, 0) + p.get('total_paid', 0)
+        for item in p.get('items', []):
+            hd = item.get('fee_head_name', 'Other')
+            by_head[hd] = by_head.get(hd, 0) + item.get('amount', 0)
+
+    total_received = sum(p.get('total_paid', 0) for p in payments)
+    total_transactions = len(payments)
+    total_discount = sum(p.get('discount', 0) for p in payments)
+    total_late_fee = sum(p.get('late_fee', 0) for p in payments)
+
+    # Expected: sum of all assignment amounts (custom_items or plan)
+    assignments = await fee_assignments_col.find({'school_id': sid}, {'_id': 0}).to_list(10000)
+    total_expected = 0.0
+    plans_cache: Dict[str, Any] = {}
+    for a in assignments:
+        items = a.get('custom_items') or []
+        if not items and a.get('fee_plan_id'):
+            pid = a['fee_plan_id']
+            if pid not in plans_cache:
+                plans_cache[pid] = await fee_plans_col.find_one({'id': pid}, {'_id': 0}) or {}
+            items = plans_cache[pid].get('items', [])
+        for it in items:
+            total_expected += it.get('amount', 0)
+        total_expected -= a.get('discount_amount', 0)
+    total_due = max(total_expected - total_received, 0)
+
+    # Attendance summary for the year
+    att = await attendance_col.find({'school_id': sid, 'date': {'$gte': year_start[:10], '$lte': year_end[:10]}}, {'_id': 0}).to_list(50000)
+    att_total = len(att)
+    att_present = sum(1 for a in att if a.get('status') == 'present')
+    att_absent = sum(1 for a in att if a.get('status') == 'absent')
+    att_leave = sum(1 for a in att if a.get('status') == 'leave')
+
+    # New admissions per month
+    students = await students_col.find({'school_id': sid}, {'_id': 0}).to_list(5000)
+    adm_months = [0] * 12
+    for s in students:
+        try:
+            ca = s.get('created_at') or s.get('admission_date') or ''
+            if ca and int(ca[:4]) == year:
+                adm_months[int(ca[5:7]) - 1] += 1
+        except Exception:
+            pass
+    for i, m in enumerate(months):
+        m['admissions'] = adm_months[i]
+
+    # Class-wise pending (approximation)
+    classes = await classes_col.find({'school_id': sid}, {'_id': 0}).to_list(200)
+    by_class = []
+    for c in classes:
+        students_in_class = [s for s in students if s.get('class_id') == c['id']]
+        payer_ids = {p['student_id'] for p in payments if p['student_id'] in {s['id'] for s in students_in_class}}
+        by_class.append({
+            'class_id': c['id'], 'class_name': c['name'],
+            'total_students': len(students_in_class),
+            'paying_students': len(payer_ids),
+            'pending_students': max(len(students_in_class) - len(payer_ids), 0),
+        })
+
+    return {
+        'year': year,
+        'total_received': total_received,
+        'total_expected': total_expected,
+        'total_due': total_due,
+        'total_discount': total_discount,
+        'total_late_fee': total_late_fee,
+        'total_transactions': total_transactions,
+        'months': months,
+        'by_mode': by_mode,
+        'by_head': by_head,
+        'by_class': by_class,
+        'attendance': {
+            'total': att_total,
+            'present': att_present,
+            'absent': att_absent,
+            'leave': att_leave,
+            'rate': round(att_present / att_total * 100, 2) if att_total else 0.0,
+        },
+        'total_students': len(students),
+    }
+
+
+# =====================================================
+# ENHANCED REPORTS - Fee Status per student (paid/pending)
+# =====================================================
+@api.get('/reports/fee-status')
+async def report_fee_status(request: Request, current=Depends(get_current_user),
+                            school_id: Optional[str] = None,
+                            class_id: Optional[str] = None,
+                            section: Optional[str] = None,
+                            status_filter: Optional[str] = None,  # paid|partial|unpaid
+                            min_due: Optional[float] = None,
+                            max_due: Optional[float] = None):
+    sid = resolve_school_id(current, school_id, request.headers.get('X-School-Id'))
+    student_q: Dict[str, Any] = {'school_id': sid, 'status': 'active'}
+    if class_id:
+        student_q['class_id'] = class_id
+    if section:
+        student_q['section'] = section
+    students = await students_col.find(student_q, {'_id': 0}).to_list(5000)
+
+    # Build class map
+    classes = await classes_col.find({'school_id': sid}, {'_id': 0}).to_list(200)
+    class_map = {c['id']: c['name'] for c in classes}
+
+    # Get all assignments & payments in bulk
+    student_ids = [s['id'] for s in students]
+    assignments = await fee_assignments_col.find({'student_id': {'$in': student_ids}}, {'_id': 0}).to_list(20000)
+    payments = await payments_col.find({'student_id': {'$in': student_ids}, 'status': 'success'}, {'_id': 0}).to_list(20000)
+
+    # Plan cache
+    plan_cache: Dict[str, Any] = {}
+    async def _get_plan(pid):
+        if pid not in plan_cache:
+            plan_cache[pid] = await fee_plans_col.find_one({'id': pid}, {'_id': 0}) or {}
+        return plan_cache[pid]
+
+    # Sum per student
+    expected_by_stu: Dict[str, float] = {}
+    discount_by_stu: Dict[str, float] = {}
+    due_date_by_stu: Dict[str, Optional[str]] = {}
+    for a in assignments:
+        sid_ = a['student_id']
+        items = a.get('custom_items') or []
+        if not items and a.get('fee_plan_id'):
+            plan = await _get_plan(a['fee_plan_id'])
+            items = plan.get('items', [])
+        expected_by_stu[sid_] = expected_by_stu.get(sid_, 0.0) + sum(i.get('amount', 0) for i in items)
+        discount_by_stu[sid_] = discount_by_stu.get(sid_, 0.0) + a.get('discount_amount', 0)
+        if a.get('due_date') and not due_date_by_stu.get(sid_):
+            due_date_by_stu[sid_] = a['due_date']
+
+    paid_by_stu: Dict[str, float] = {}
+    for p in payments:
+        paid_by_stu[p['student_id']] = paid_by_stu.get(p['student_id'], 0.0) + p.get('total_paid', 0)
+
+    rows = []
+    for s in students:
+        expected = expected_by_stu.get(s['id'], 0.0)
+        disc = discount_by_stu.get(s['id'], 0.0)
+        paid = paid_by_stu.get(s['id'], 0.0)
+        due = max(expected - disc - paid, 0.0)
+        row_status = 'unpaid' if paid == 0 else ('paid' if due <= 0 else 'partial')
+        if status_filter and status_filter != row_status:
+            continue
+        if min_due is not None and due < min_due:
+            continue
+        if max_due is not None and due > max_due:
+            continue
+        rows.append({
+            'student_id': s['id'],
+            'admission_number': s.get('admission_number'),
+            'full_name': s.get('full_name'),
+            'class_name': class_map.get(s.get('class_id'), '-'),
+            'section': s.get('section'),
+            'phone': s.get('phone'),
+            'father_name': s.get('father_name'),
+            'expected': expected,
+            'discount': disc,
+            'paid': paid,
+            'due': due,
+            'due_date': due_date_by_stu.get(s['id']),
+            'status': row_status,
+        })
+    total_expected = sum(r['expected'] for r in rows)
+    total_paid = sum(r['paid'] for r in rows)
+    total_due = sum(r['due'] for r in rows)
+    total_discount = sum(r['discount'] for r in rows)
+    return {
+        'rows': rows,
+        'count': len(rows),
+        'summary': {
+            'total_expected': total_expected,
+            'total_paid': total_paid,
+            'total_due': total_due,
+            'total_discount': total_discount,
+            'paid_count': sum(1 for r in rows if r['status'] == 'paid'),
+            'partial_count': sum(1 for r in rows if r['status'] == 'partial'),
+            'unpaid_count': sum(1 for r in rows if r['status'] == 'unpaid'),
+        }
+    }
 
 
 # ------------ Mount router & middlewares ------------

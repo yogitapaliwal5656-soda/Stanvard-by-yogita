@@ -23,10 +23,11 @@ export default function ParentPay() {
       setDues(data);
       const now = new Date();
       const monthLabel = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-      setItems((data.dues || []).slice(0, 3).map((d) => ({
+      setItems((data.dues || []).slice(0, 6).map((d) => ({
         fee_head_id: d.fee_head_id, fee_head_name: d.fee_head_name,
         period: d.frequency === 'yearly' ? '2025-26' : monthLabel,
         amount: d.amount, selected: true,
+        due_date: d.due_date,
       })));
     })();
   }, [user]);
@@ -88,7 +89,7 @@ export default function ParentPay() {
                 <input type="checkbox" checked={it.selected} onChange={() => { const nx = [...items]; nx[i].selected = !nx[i].selected; setItems(nx); }} />
                 <div className="flex-1">
                   <div className="font-medium">{it.fee_head_name}</div>
-                  <div className="text-xs text-muted-foreground">{it.period}</div>
+                  <div className="text-xs text-muted-foreground">{it.period} {it.due_date && <span className="ml-1 text-[#B45309]">• Due by {it.due_date}</span>}</div>
                 </div>
                 <div className="font-semibold tabular-nums">{money(it.amount)}</div>
               </label>
