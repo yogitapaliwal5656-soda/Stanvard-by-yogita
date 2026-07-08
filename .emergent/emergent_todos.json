@@ -1,23 +1,23 @@
 [
   {
     "content": "Phase 1: Get Razorpay integration playbook",
-    "status": "in_progress"
+    "status": "completed"
   },
   {
     "content": "Phase 1: Ask user for Razorpay test API keys",
-    "status": "pending"
+    "status": "completed"
   },
   {
     "content": "Phase 1: Create POC test script (Razorpay order + signature verify + PDF receipt)",
-    "status": "pending"
+    "status": "completed"
   },
   {
     "content": "Phase 1: Run POC and fix until it passes",
-    "status": "pending"
+    "status": "completed"
   },
   {
     "content": "Phase 2: Call design_agent for enterprise UI guidelines",
-    "status": "pending"
+    "status": "in_progress"
   },
   {
     "content": "Phase 2: Install backend + frontend dependencies",
