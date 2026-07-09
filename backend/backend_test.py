@@ -56,14 +56,14 @@ class TestRunner:
                 self.log(f"❌ FAILED - Expected {expected_status}, got {response.status_code}", Colors.RED)
                 try:
                     self.log(f"   Response: {response.json()}", Colors.RED)
-                except:
+                except Exception:
                     self.log(f"   Response: {response.text[:200]}", Colors.RED)
                 return False, None
             
             # Parse response
             try:
                 resp_data = response.json()
-            except:
+            except Exception:
                 resp_data = None
             
             # Run custom validation if provided
@@ -72,7 +72,7 @@ class TestRunner:
                     validation_result = validate_fn(resp_data)
                     if not validation_result:
                         self.tests_failed += 1
-                        self.log(f"❌ FAILED - Validation failed", Colors.RED)
+                        self.log("❌ FAILED - Validation failed", Colors.RED)
                         return False, resp_data
                 except Exception as e:
                     self.tests_failed += 1
@@ -85,7 +85,7 @@ class TestRunner:
             
         except requests.exceptions.Timeout:
             self.tests_failed += 1
-            self.log(f"❌ FAILED - Request timeout", Colors.RED)
+            self.log("❌ FAILED - Request timeout", Colors.RED)
             return False, None
         except Exception as e:
             self.tests_failed += 1
@@ -94,7 +94,7 @@ class TestRunner:
     
     def print_summary(self):
         print(f"\n{'='*60}")
-        print(f"📊 TEST SUMMARY")
+        print("📊 TEST SUMMARY")
         print(f"{'='*60}")
         print(f"Total Tests: {self.tests_run}")
         print(f"{Colors.GREEN}Passed: {self.tests_passed}{Colors.END}")
@@ -278,7 +278,7 @@ def main():
             has_tuition = any('Tuition' in item.get('fee_head_name', '') 
                             for item in first.get('custom_items', []))
             if has_tuition:
-                runner.log(f"   ✓ Assignments have Tuition Fee items", Colors.GREEN)
+                runner.log("   ✓ Assignments have Tuition Fee items", Colors.GREEN)
             # Check for discounts
             with_discount = [a for a in resp if a.get('discount_amount', 0) > 0]
             runner.log(f"   Students with concession: {len(with_discount)}", Colors.GREEN)
@@ -424,12 +424,12 @@ def main():
                 validate_fn=lambda r: r and new_kid_id in r.get('linked_student_ids', [])
             )
             if success:
-                runner.log(f"   ✓ Successfully updated linked children", Colors.GREEN)
+                runner.log("   ✓ Successfully updated linked children", Colors.GREEN)
                 
                 # Test 4c: Verify the change persisted
                 runner.test(
                     "Verify PATCH persisted (fetch parent again)",
-                    "GET", f"/users", 200,
+                    "GET", "/users", 200,
                     token=runner.tokens.get('super_admin'),
                     params={"role": "parent"},
                     validate_fn=lambda r: any(
@@ -459,7 +459,7 @@ def main():
         validate_fn=lambda r: r and 'months' in r
     )
     if success:
-        runner.log(f"   ✓ Analytics working", Colors.GREEN)
+        runner.log("   ✓ Analytics working", Colors.GREEN)
     
     # Test 5b: Fee status report works
     success, resp = runner.test(
@@ -469,7 +469,7 @@ def main():
         validate_fn=lambda r: r and 'payments' in r
     )
     if success:
-        runner.log(f"   ✓ Collection report working", Colors.GREEN)
+        runner.log("   ✓ Collection report working", Colors.GREEN)
     
     # Test 5c: PDF download endpoint exists
     runner.test(

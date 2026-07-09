@@ -28,7 +28,11 @@
     "status": "completed"
   },
   {
+    "content": "Fix school-context timing race in Users.jsx (linked children names missing)",
+    "status": "completed"
+  },
+  {
     "content": "Run real_seed and test end-to-end via testing_agent_v3",
-    "status": "in_progress"
+    "status": "completed"
   }
 ]

@@ -1,11 +1,15 @@
 # plan.md — Stanvard School ERP (Multi-Branch) Development Plan (Updated)
 
 ## 1) Objectives
-- Deliver a production-ready, multi-tenant School ERP + Parent Portal for 3 initial branches with unlimited future branches.
+- Deliver a production-ready, multi-branch School ERP + Parent Portal for Stanvard School with **3 initial branches** (Kanpur, Ganesh Nagar, Ayar) and unlimited future branches.
 - Ensure **multi-branch isolation** with independent data per school + a robust **school switcher**.
 - Prove the **core workflow** is solid before mobile app build: **Fee collection → Razorpay order → verification/webhook → receipt PDF**.
-- Build a modern, responsive UI (React + shadcn/ui + Tailwind) with role-based UX (Super Admin, Admin, Accountant, Teacher, Parent).
+- Build a modern, responsive web UI (React + shadcn/ui + Tailwind) with role-based UX (Super Admin, Admin, Accountant, Teacher, Parent).
 - Provide fee-first visibility: **fee analytics, receipts, transaction history, and downloadable reports** for any selected date range and selected classes/sections.
+- Move from MVP/demo to production readiness:
+  - Import and operate on **real student data**
+  - Remove demo credentials
+  - Enable parents to log in using **mobile number** and support **multiple children per parent account**
 - Ensure security, auditability, and “no hard deletes” across modules.
 
 ---
@@ -69,6 +73,7 @@ Frontend (React + shadcn/ui + Tailwind)
 
 Status
 - ✅ Completed as part of current MVP: multi-branch architecture, RBAC authentication, school switcher, student management, advanced fee management, Razorpay order generation, PDF receipts, reports dashboard.
+- ✅ **Production Data Migration COMPLETE** (see Phase 4 status for details).
 
 Testing checkpoint
 - ✅ Completed: repeated testing via `testing_agent_v3` with zero failing flows across prior iterations.
@@ -104,12 +109,9 @@ Status
 
 - ✅ **Reports Enhancement COMPLETE:** Student Fee Status — multi-class/section + exports.
   - Backend:
-    - `/api/reports/fee-status` now supports `class_sections` (comma-separated `class_id:section` pairs; blank section means *all* sections of that class).
+    - `/api/reports/fee-status` supports `class_sections` (comma-separated `class_id:section` pairs; blank section means *all* sections of that class).
     - `min_due` / `max_due` filters removed.
-    - Added export endpoints:
-      - `/api/reports/fee-status.pdf`
-      - `/api/reports/fee-status.xlsx`
-      - `/api/reports/fee-status.csv`
+    - Added export endpoints: `/api/reports/fee-status.pdf`, `/api/reports/fee-status.xlsx`, `/api/reports/fee-status.csv`.
     - All exports respect `class_sections` and `status_filter`.
   - Frontend:
     - Reports > Student Fee Status uses a Popover multi-select (per-class master checkbox + per-section chips) with removable selection chips.
@@ -138,16 +140,52 @@ Steps
 5. Security: rate limiting basics, input validation, file upload constraints, audit log for auth events.
 6. Run testing_agent_v3: full role-based E2E regression.
 
-Status
+Status (Updated)
 - ✅ Authentication + RBAC already implemented in MVP (Super Admin, Admin, Accountant, Teacher, Parent).
-- ⚠️ Deferred hardening remains (see Pending Technical Debt).
+- ✅ **Login supports email OR mobile number**:
+  - Backend `LoginRequest.email` is now a string identifier.
+  - `/api/auth/login` attempts email match, then phone match (digits-only; supports `+91` and spaces via last-10-digits matching).
+- ✅ **Multi-child parent accounts supported**:
+  - User model adds `linked_student_ids: List[str]` while keeping legacy `linked_student_id` for backward compatibility.
+  - Parent access checks refactored to authorize against the merged child ID set.
+- ✅ **Parent Portal Child Switcher added**:
+  - `ChildContext` persists active child in localStorage.
+  - `ChildSwitcher`:
+    - Single-child: static badge.
+    - Multi-child: popover to switch children.
+  - Implemented on Parent Home and Parent Pay pages.
+- ✅ **Admin UI supports linking multiple students to a parent**:
+  - Users page edit dialog includes “Linked Children” block with chips + search + add/remove.
+  - Fixed a school-context timing race that previously caused linked-child names to appear missing on initial load.
+- ✅ **Demo data and demo credentials removed**:
+  - Login page no longer displays demo accounts.
+
+**Production credentials (current):**
+- Super Admin: `superadmin@stanvard.school` / `Stanvard@2026`
+- Accountant: `accountant@stanvard.school` / `Accountant@2026`
+- Parents: username = mobile number (10-digit) | password = last 6 digits of the same mobile
+
+**Production data migration (complete):**
+- Real FY 2026-27 Excel imported into **Kanpur** branch:
+  - 375 students
+  - 13 classes (LKG, UKG, PREP, Class I–X), section = `A`
+  - 375 fee assignments (Tuition Fee)
+  -  >100 imported payment records (opening balances) where “paid” existed in Excel
+  - ~298 parent accounts created (unique mobiles); 12 students without mobile → no parent account
+- Ganesh Nagar and Ayar branches preserved as **empty shells** (0 students) for future onboarding.
+
+Testing
+- ✅ `testing_agent_v3` iteration_9:
+  - Backend: 100% (37/37)
+  - Frontend: critical flows verified (mobile login, multi-child parent switcher, Users linking UI, Pay page switching)
 
 User stories (Phase 4)
 1. As a super admin, I can log in and manage schools and users across all branches.
 2. As a school admin, I can only access my assigned school’s data and modules.
 3. As a teacher, I can only see my assigned classes for attendance/homework.
-4. As a parent, I can only see my child’s data and pay fees online.
-5. As an auditor, I can review an action trail for fee edits and receipt generation.
+4. As a parent, I can see **one or multiple children** in the portal and pay fees online.
+5. As admin, I can link **two or more kids** to the same parent account (siblings) and the parent can switch children.
+6. As an auditor, I can review an action trail for fee edits and receipt generation.
 
 ---
 
@@ -157,9 +195,12 @@ User stories (Phase 4)
 3. **Resolve pending code-review technical debt (P2):**
    - Refactor high-complexity functions: `server.py` (`analytics()`, `dashboard_summary()`), `pdf_utils.py` (`generate_receipt_pdf()`)
    - Frontend complexity: `AssignFeeDialog.jsx`, `FeeCollection.jsx`, `EditStudentDialog.jsx`
-   - Note: `Reports.jsx` was rewritten during the fee-status enhancement; keep an eye on modularizing it further if it grows.
+   - Note: `Reports.jsx` was rewritten during fee-status enhancement; keep an eye on modularizing it further if it grows.
 4. **Security hardening (P1/P2):** secure token storage (move from localStorage to httpOnly cookies or equivalent mitigation), tighten CSP, and review XSS exposure.
-5. **Extend reporting (optional):** server-side export endpoints for Analytics transactions (PDF/XLSX/CSV) and/or “download filtered transactions” for management.
+5. **Operational readiness (P1/P2):**
+   - Add a safe “backup/export database” + restore procedure
+   - Add admin UI for correcting parent mobile numbers and reissuing passwords
+6. **Extend reporting (optional):** server-side export endpoints for Analytics transactions (PDF/XLSX/CSV) and/or “download filtered transactions” for management.
 
 ---
 
@@ -167,18 +208,22 @@ User stories (Phase 4)
 - Phase 1: Razorpay order creation + signature verification + webhook verification + valid receipt PDF generation works reliably.
 - Phase 2: Multi-school scoping works end-to-end; fee collection (offline + Razorpay) generates immutable receipts + PDFs.
 - Phase 3: Attendance/homework/circulars/reports functional with exports; **analytics includes drill-down transaction history by filter**; **fee-status reports support multi-class/section selection with PDF/XLSX/CSV exports**; no cross-school data leakage.
-- Phase 4: RBAC enforced on backend and UI; parent portal fully usable; audit logs cover critical operations; regression tests pass.
+- Phase 4: RBAC enforced on backend and UI; parent portal fully usable for **single-child and multi-child** parents; audit logs cover critical operations; regression tests pass.
+- Production readiness: real data imported, demo content removed, production credentials established, parents can log in by mobile and view their linked children.
 
 ---
 
-## Appendix — Current Status Snapshot (MVP)
-- ✅ Multi-branch: Ganesh Nagar, Kanpur, Ayar; robust school context switcher.
+## Appendix — Current Status Snapshot (Production Data Live)
+- ✅ Multi-branch preserved: Kanpur (active real data), Ganesh Nagar (empty), Ayar (empty) + school switcher.
+- ✅ Real data imported: 375 students, 13 classes, 375 fee assignments,  >100 opening-balance payments.
 - ✅ Role-based access: Super Admin, Admin, Accountant, Teacher, Parent.
-- ✅ Student Management: list/add/edit, scoped per school.
+- ✅ Parent auth: login with mobile number; password = last 6 digits; supports `+91` prefix.
+- ✅ Parent portal: child switcher + multi-child support.
+- ✅ Users admin: multi-child linking UI for parent accounts.
 - ✅ Fee Management: custom assignments, Razorpay order generation, server-side PDF receipt generation.
-- ✅ Analytics: fee-focused KPIs + charts + **transaction history by selected date range** (Task 1 complete; tested iteration_7 100% pass).
+- ✅ Analytics: fee-focused KPIs + charts + transaction history by selected date range (iteration_7 100% pass).
 - ✅ Reports:
-  - ✅ Fee Collection exports (existing)
-  - ✅ Student Fee Status: **multi-class/section selection**, **Min/Max Due removed**, **PDF/XLSX/CSV exports added** (tested iteration_8 100% pass).
-- ✅ Testing: `testing_agent_v3` iterations (latest: iteration_8 100% pass; no regressions).
+  - Fee Collection exports (existing)
+  - Student Fee Status: multi-class/section selection + PDF/XLSX/CSV exports; Min/Max Due removed (iteration_8 100% pass).
+- ✅ Testing: `testing_agent_v3` iterations 1–9 (latest: iteration_9 backend 100% pass; frontend critical flows verified).
 - ⚠️ Deferred: refactors + secure token storage + payment go-live hardening.

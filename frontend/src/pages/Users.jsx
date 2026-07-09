@@ -13,6 +13,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Plus, User as UserIcon, Pencil, Trash2, KeyRound, Search, X, UsersRound } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSchool } from '@/contexts/SchoolContext';
 
 const ROLES = ['super_admin', 'school_admin', 'accountant', 'teacher', 'parent'];
 
@@ -25,6 +26,7 @@ const mergedChildIds = (u) => {
 
 export default function UsersPage() {
   const { user } = useAuth();
+  const { activeSchoolId } = useSchool();
   const [users, setUsers] = useState([]);
   const [schools, setSchools] = useState([]);
   const [students, setStudents] = useState([]);
@@ -36,11 +38,20 @@ export default function UsersPage() {
 
   const load = async () => {
     const [{ data: u }, { data: s }, { data: st }] = await Promise.all([
-      api.get('/users'), api.get('/schools'), api.get('/students', { params: { limit: 2000 } })
+      api.get('/users'), api.get('/schools'), api.get('/students', { params: { limit: 2000 } }),
     ]);
     setUsers(u); setSchools(s); setStudents(st);
   };
-  useEffect(() => { load(); }, []);
+  // Trigger a load whenever the active school changes (super-admin branch
+  // switch) AND on the initial hydration when activeSchoolId flips from null
+  // to the real ID. This eliminates the timing race where /students runs
+  // before the school context populates the X-School-Id header.
+  useEffect(() => { load(); }, [activeSchoolId]);
+  useEffect(() => {
+    const h = () => load();
+    window.addEventListener('stv:school-changed', h);
+    return () => window.removeEventListener('stv:school-changed', h);
+  }, []);
   const schoolMap = Object.fromEntries(schools.map((s) => [s.id, s.name.replace('Stanvard School - ', '')]));
   const studentMap = Object.fromEntries(students.map((s) => [s.id, `${s.full_name} (${s.admission_number})`]));
 
@@ -142,6 +153,9 @@ function UserFormDialog({ open, onOpenChange, schools, students, isSuper, editUs
   const [form, setForm] = useState({ email: '', password: '', full_name: '', role: 'teacher', school_id: '', phone: '', linked_student_ids: [] });
   const [saving, setSaving] = useState(false);
   const [childSearch, setChildSearch] = useState('');
+  // Locally-fetched student docs for linked children that aren't in the parent
+  // `students` prop (e.g. large schools or school-context timing races).
+  const [extraStudents, setExtraStudents] = useState({});
 
   useEffect(() => {
     if (editUser) {
@@ -154,12 +168,29 @@ function UserFormDialog({ open, onOpenChange, schools, students, isSuper, editUs
       setForm({ email: '', password: '', full_name: '', role: 'teacher', school_id: '', phone: '', linked_student_ids: [] });
     }
     setChildSearch('');
+    setExtraStudents({});
   }, [editUser, open]);
 
-  const filteredStudents = students.filter((s) => !form.school_id || s.school_id === form.school_id);
+  // Backfill missing children (linked but not in `students` prop)
+  useEffect(() => {
+    const known = new Set(students.map((s) => s.id));
+    const missing = form.linked_student_ids.filter((id) => !known.has(id) && !extraStudents[id]);
+    if (missing.length === 0) return;
+    (async () => {
+      const results = await Promise.all(
+        missing.map((id) => api.get(`/students/${id}`).then((r) => r.data).catch(() => null)),
+      );
+      const map = { ...extraStudents };
+      results.forEach((doc) => { if (doc) map[doc.id] = doc; });
+      setExtraStudents(map);
+    })();
+  }, [form.linked_student_ids, students]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const allStudents = [...students, ...Object.values(extraStudents)];
+  const filteredStudents = allStudents.filter((s) => !form.school_id || s.school_id === form.school_id);
   const linkedStudents = useMemo(
-    () => form.linked_student_ids.map((id) => students.find((s) => s.id === id)).filter(Boolean),
-    [form.linked_student_ids, students],
+    () => form.linked_student_ids.map((id) => allStudents.find((s) => s.id === id)).filter(Boolean),
+    [form.linked_student_ids, allStudents.length], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const searchLower = childSearch.trim().toLowerCase();
   const suggestions = useMemo(() => {
