@@ -425,6 +425,35 @@ async def create_fee_head(body: FeeHeadCreate, request: Request, current=Depends
     return fh.model_dump()
 
 
+@api.patch('/fees/heads/{head_id}', dependencies=[Depends(require_roles('super_admin', 'school_admin'))])
+async def update_fee_head(head_id: str, body: FeeHeadCreate, current=Depends(get_current_user)):
+    upd = body.model_dump(exclude_none=True)
+    upd.pop('school_id', None)
+    upd['updated_at'] = now_iso()
+    r = await fee_heads_col.update_one({'id': head_id}, {'$set': upd})
+    if not r.matched_count:
+        raise HTTPException(404, 'Fee head not found')
+    await log_audit(action='fee_head.update', current_user=current,
+                    entity_type='fee_head', entity_id=head_id, details=upd)
+    return await fee_heads_col.find_one({'id': head_id}, {'_id': 0})
+
+
+@api.delete('/fees/heads/{head_id}', dependencies=[Depends(require_roles('super_admin', 'school_admin'))])
+async def delete_fee_head(head_id: str, current=Depends(get_current_user)):
+    head = await fee_heads_col.find_one({'id': head_id}, {'_id': 0})
+    if not head:
+        raise HTTPException(404, 'Fee head not found')
+    # Safety: refuse delete if this head is used in any plan or assignment.
+    plan_uses = await fee_plans_col.count_documents({'items.fee_head_id': head_id})
+    assign_uses = await fee_assignments_col.count_documents({'custom_items.fee_head_id': head_id})
+    if plan_uses or assign_uses:
+        raise HTTPException(400, f'Cannot delete: fee head is used in {plan_uses} plan(s) and {assign_uses} assignment(s). Remove references first or deactivate the head instead.')
+    await fee_heads_col.delete_one({'id': head_id})
+    await log_audit(action='fee_head.delete', current_user=current,
+                    entity_type='fee_head', entity_id=head_id, details={'name': head.get('name')})
+    return {'ok': True}
+
+
 # =====================================================
 # FEE PLANS
 # =====================================================
@@ -459,6 +488,20 @@ async def update_fee_plan(plan_id: str, body: FeePlanCreate, current=Depends(get
     await log_audit(action='fee_plan.update', current_user=current,
                     entity_type='fee_plan', entity_id=plan_id, details=upd)
     return await fee_plans_col.find_one({'id': plan_id}, {'_id': 0})
+
+
+@api.delete('/fees/plans/{plan_id}', dependencies=[Depends(require_roles('super_admin', 'school_admin'))])
+async def delete_fee_plan(plan_id: str, current=Depends(get_current_user)):
+    plan = await fee_plans_col.find_one({'id': plan_id}, {'_id': 0})
+    if not plan:
+        raise HTTPException(404, 'Plan not found')
+    used = await fee_assignments_col.count_documents({'fee_plan_id': plan_id})
+    if used:
+        raise HTTPException(400, f'Cannot delete: fee plan is used in {used} student assignment(s). Reassign those students first.')
+    await fee_plans_col.delete_one({'id': plan_id})
+    await log_audit(action='fee_plan.delete', current_user=current,
+                    entity_type='fee_plan', entity_id=plan_id, details={'name': plan.get('name')})
+    return {'ok': True}
 
 
 @api.post('/fees/plans/{plan_id}/assign', dependencies=[Depends(require_roles('super_admin', 'school_admin'))])
@@ -533,6 +576,145 @@ async def student_dues(student_id: str, request: Request, current=Depends(get_cu
         'total_paid': total_paid,
         'balance': balance,
         'recent_payments': sorted(payments, key=lambda x: x.get('paid_at', ''), reverse=True)[:10],
+    }
+
+
+# ---------- MONTHLY / ANNUAL FEE SCHEDULE (for Parent Portal) ----------
+def _session_months(session: str) -> list:
+    """Return 12 (month_index, year, label) tuples for an academic session like '2026-27',
+    starting from April of the first year."""
+    try:
+        start_year = int(session.split('-')[0])
+    except Exception:
+        start_year = datetime.now().year
+    out = []
+    for i in range(12):
+        m = 4 + i  # April=4
+        y = start_year + (0 if m <= 12 else 1)
+        m2 = m if m <= 12 else m - 12
+        y2 = start_year if m <= 12 else start_year + 1
+        label = datetime(y2, m2, 1).strftime('%B %Y')
+        out.append({'index': i, 'month': m2, 'year': y2, 'label': label})
+    return out
+
+
+@api.get('/fees/student/{student_id}/fee-schedule')
+async def student_fee_schedule(student_id: str, request: Request, current=Depends(get_current_user)):
+    """Return a monthly & annual view of the student's fee liability for the
+    parent portal. Splits the annual tuition/etc. into 12 equal monthly parts,
+    marks months as paid based on prior payments (FIFO), and computes the
+    'pay full' amount with the plan's annual discount applied."""
+    student = await students_col.find_one({'id': student_id}, {'_id': 0})
+    if not student:
+        raise HTTPException(404, 'Student not found')
+    if current['role'] == 'parent' and not parent_can_access_student(current, student_id):
+        raise HTTPException(403, 'Forbidden')
+
+    assignments = await fee_assignments_col.find({'student_id': student_id}, {'_id': 0}).to_list(50)
+
+    # Aggregate: annual amount, discount, session, discount_percent from plan
+    annual_total = 0.0
+    plan_discount_amount = 0.0
+    annual_discount_percent = 0.0
+    session = '2026-27'
+    items_flat: list = []  # for reference display
+    for a in assignments:
+        session = a.get('academic_session') or session
+        # discount amount
+        plan_discount_amount += float(a.get('discount_amount') or 0)
+        if a.get('custom_items'):
+            for it in a['custom_items']:
+                items_flat.append(it)
+                annual_total += float(it.get('amount') or 0)
+        elif a.get('fee_plan_id'):
+            plan = await fee_plans_col.find_one({'id': a['fee_plan_id']}, {'_id': 0})
+            if plan:
+                annual_discount_percent = max(annual_discount_percent, float(plan.get('annual_discount_percent') or 0))
+                for it in (plan.get('items') or []):
+                    items_flat.append(it)
+                    annual_total += float(it.get('amount') or 0)
+        # percent-based discount on this assignment
+        if a.get('discount_percent'):
+            plan_discount_amount += (annual_total * float(a['discount_percent']) / 100.0)
+
+    # Effective yearly (net of concession)
+    net_annual = max(annual_total - plan_discount_amount, 0.0)
+    monthly_amount = round(net_annual / 12.0, 2) if net_annual > 0 else 0.0
+
+    # Payments so far
+    payments = await payments_col.find({'student_id': student_id, 'status': 'success'}, {'_id': 0}).to_list(500)
+    total_paid = sum(float(p.get('total_paid') or 0) for p in payments)
+
+    # Build 12-month schedule and mark paid months by FIFO against total_paid,
+    # but also promote months that were EXPLICITLY tagged in a prior payment's
+    # line-item period (e.g. "April 2026") so parents can see exact months.
+    explicit_paid_labels = set()
+    for p in payments:
+        for it in (p.get('items') or []):
+            per = (it.get('period') or '').strip()
+            if per:
+                explicit_paid_labels.add(per)
+
+    months = _session_months(session)
+    # First, mark explicit months as paid.
+    remaining_to_absorb = total_paid
+    schedule = []
+    explicit_amount_absorbed = 0.0
+    for m in months:
+        entry = {
+            'index': m['index'], 'label': m['label'], 'month': m['month'], 'year': m['year'],
+            'amount': monthly_amount, 'paid_amount': 0.0, 'status': 'pending',
+        }
+        if m['label'] in explicit_paid_labels:
+            entry['status'] = 'paid'
+            entry['paid_amount'] = monthly_amount
+            explicit_amount_absorbed += monthly_amount
+        schedule.append(entry)
+
+    # Absorb remaining paid amount over the not-yet-paid months in order (FIFO).
+    remaining_to_absorb = max(total_paid - explicit_amount_absorbed, 0.0)
+    for entry in schedule:
+        if entry['status'] == 'paid':
+            continue
+        if remaining_to_absorb <= 0:
+            break
+        if remaining_to_absorb >= monthly_amount - 0.01:
+            entry['status'] = 'paid'
+            entry['paid_amount'] = monthly_amount
+            remaining_to_absorb -= monthly_amount
+        else:
+            entry['status'] = 'partial'
+            entry['paid_amount'] = round(remaining_to_absorb, 2)
+            remaining_to_absorb = 0
+
+    # Mark overdue months (past current month, still pending)
+    today = datetime.now()
+    for entry in schedule:
+        if entry['status'] in ('pending', 'partial'):
+            # An overdue month is one whose (year, month) is strictly before current
+            if (entry['year'], entry['month']) < (today.year, today.month):
+                entry['status'] = 'overdue' if entry['status'] == 'pending' else entry['status']
+
+    remaining_balance = max(net_annual - total_paid, 0.0)
+    # Pay Full discount — apply annual_discount_percent on the REMAINING amount
+    # (only meaningful before any payment; if already partially paid, apply on what's left).
+    full_payment_discount = round(remaining_balance * (annual_discount_percent / 100.0), 2) if annual_discount_percent > 0 else 0.0
+    payable_full = round(max(remaining_balance - full_payment_discount, 0.0), 2)
+
+    return {
+        'student': student,
+        'academic_session': session,
+        'annual_total': round(annual_total, 2),
+        'concession': round(plan_discount_amount, 2),
+        'net_annual': round(net_annual, 2),
+        'monthly_amount': monthly_amount,
+        'total_paid': round(total_paid, 2),
+        'remaining_balance': round(remaining_balance, 2),
+        'annual_discount_percent': annual_discount_percent,
+        'full_payment_discount': full_payment_discount,
+        'payable_full': payable_full,
+        'schedule': schedule,
+        'fee_head_names': list({(it.get('fee_head_name') or 'Tuition Fee') for it in items_flat}) or ['Tuition Fee'],
     }
 
 
