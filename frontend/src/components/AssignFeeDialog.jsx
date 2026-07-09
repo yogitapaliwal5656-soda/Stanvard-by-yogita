@@ -24,7 +24,7 @@ function sessionYear(dueDate) {
   return now.getMonth() + 1 >= 4 ? now.getFullYear() : now.getFullYear() - 1;
 }
 function monthLabels(startYear) {
-  return MONTH_ORDER.map((m, idx) => {
+  return MONTH_ORDER.map((m) => {
     const y = m >= 4 ? startYear : startYear + 1;
     return new Date(y, m - 1, 1).toLocaleString('en-US', { month: 'short', year: '2-digit' });
   });
@@ -190,8 +190,8 @@ export function AssignFeeDialog({ open, onOpenChange, student, feePlans, feeHead
             <div>
               <div className="text-xs font-medium mb-2 text-muted-foreground">Month-wise breakdown (Apr → Mar)</div>
               <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1.5">
-                {monthLabels(sessionYear(dueDate)).map((label, i) => (
-                  <div key={i} className="rounded border border-border px-2 py-1.5 text-[11px]">
+                {monthLabels(sessionYear(dueDate)).map((label) => (
+                  <div key={label} className="rounded border border-border px-2 py-1.5 text-[11px]">
                     <div className="font-semibold truncate">{label}</div>
                     <div className="tabular-nums text-muted-foreground">{money(netTotal / 12)}</div>
                   </div>

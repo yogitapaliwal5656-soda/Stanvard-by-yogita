@@ -157,6 +157,14 @@ backend:
               ISSUE: Missing RBAC check on GET /api/reports/fee-status endpoint. The endpoint does not restrict parent role from viewing schoolwide data.
               LOCATION: backend/server.py line 1615 - @api.get('/reports/fee-status') has no role-based access control.
               FIX NEEDED: Add role check to restrict this endpoint to super_admin, school_admin, and accountant roles only. Parents should only see their own children's data, not schoolwide reports.
+        - working: true
+          agent: "testing"
+          comment: |
+            Regression test after frontend-only changes (43/43 tests passed - 100% success rate).
+            ✅ All calculations verified: expected = gross_expected - discount, due = max(expected - paid, 0), collection_percent = round(total_paid/total_expected*100, 1)
+            ✅ RBAC working correctly: Parent access to /api/reports/fee-status returns 403 (previously fixed issue confirmed)
+            ✅ All exports working: PDF, XLSX, CSV with correct content types
+            No backend issues found. All functionality intact after frontend changes.
 
   - task: "Fee Head edit/delete endpoints"
     implemented: true
@@ -181,6 +189,9 @@ backend:
               ✓ Delete referenced "Tuition Fee" head correctly blocked → 400 with detail: "Cannot delete: fee head is used in 13 plan(s) and 375 assignment(s). Remove references first or deactivate the head instead."
               ✓ Accountant correctly forbidden → 403
             RBAC working correctly. Safety checks working as expected.
+        - working: true
+          agent: "testing"
+          comment: "Regression test: PATCH /api/fees/heads/{id} succeeds (200), DELETE in-use fee head correctly returns 400. All functionality intact."
 
   - task: "Fee Plan delete endpoint"
     implemented: true
@@ -202,6 +213,9 @@ backend:
               ✓ Delete fresh unused plan → 200 {ok: true}
               ✓ Accountant correctly forbidden → 403
             Safety checks working correctly. RBAC enforced properly.
+        - working: true
+          agent: "testing"
+          comment: "Regression test: DELETE in-use fee plan correctly returns 400. All functionality intact."
 
   - task: "Monthly fee schedule endpoint"
     implemented: true
@@ -242,6 +256,9 @@ backend:
               ✓ Parent correctly forbidden from accessing other student → 403
             Sample data verified: Disha Gadri - annual_total=21000, net_annual=16330, monthly_amount=1360.83, total_paid=1750
             All calculations, RBAC, and payment tracking working correctly.
+        - working: true
+          agent: "testing"
+          comment: "Regression test: GET /api/fees/student/{sid}/fee-schedule returns 200 with 12-item schedule. All functionality intact."
 
 frontend:
   - task: "Admin Collect Fee — Monthly / Full / Custom tabs"
@@ -334,7 +351,7 @@ frontend_placeholder:
 metadata:
   created_by: "main_agent"
   version: "1.2"
-  test_sequence: 12
+  test_sequence: 13
   run_ui: false
 
 test_plan:
@@ -426,3 +443,27 @@ agent_communication:
         
         Detailed test results saved in /app/backend_test.py output.
         The endpoint is functionally complete but requires RBAC fix before production use.
+    - agent: "testing"
+      message: |
+        ✅ REGRESSION TEST COMPLETE - ALL TESTS PASSED (43/43 - 100%)
+        
+        Regression testing after frontend-only changes (React key props and demo config):
+        
+        **12 Smoke Test Scenarios - All Passed:**
+        1. ✅ Authentication: super_admin, accountant, parent all login successfully (200)
+        2. ✅ GET /api/auth/me: Returns correct role for all users
+        3. ✅ GET /api/schools: Returns 3 schools
+        4. ✅ GET /api/students?limit=5: Returns 5 students
+        5. ✅ GET /api/classes: Returns 13 classes for Kanpur
+        6. ✅ GET /api/fees/plans: Returns 13 plans
+        7. ✅ GET /api/fees/heads: Returns 2 fee heads
+        8. ✅ GET /api/fees/student/{sid}/fee-schedule: Returns 200 with 12-item schedule
+        9. ✅ Fee-status calculations: expected = gross_expected - discount ✓, due = max(expected - paid, 0) ✓, collection_percent = round(total_paid/total_expected*100, 1) ✓
+        10. ✅ RBAC: Parent access to /api/reports/fee-status correctly returns 403 (previously fixed issue confirmed working)
+        11. ✅ Exports: PDF (application/pdf), XLSX (xlsx), CSV (text/csv) all working
+        12. ✅ CRUD: PATCH /api/fees/heads/{id} succeeds, DELETE in-use head returns 400, DELETE in-use plan returns 400
+        
+        **Conclusion:**
+        No backend issues found. All API endpoints, calculations, RBAC, and exports working correctly.
+        Frontend changes (key props in FeesStructure.jsx, AssignFeeDialog.jsx, and demo config in demoAccounts.js) have NOT affected backend functionality.
+        Backend is stable and production-ready.
