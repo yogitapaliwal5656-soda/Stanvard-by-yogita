@@ -168,7 +168,7 @@ class FeeStatusReportTester:
                     resp = requests.get(f"{BASE_URL}/reports/fee-status",
                                       params={'class_sections': cs_param},
                                       headers=self.get_headers(), timeout=15)
-                    self.test(f"class_sections with multiple pairs (OR semantics)",
+                    self.test("class_sections with multiple pairs (OR semantics)",
                              resp.status_code == 200,
                              f"Param: {cs_param}")
                     if resp.status_code == 200:

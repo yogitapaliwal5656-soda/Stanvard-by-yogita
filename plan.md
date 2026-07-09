@@ -5,7 +5,7 @@
 - Ensure **multi-branch isolation** with independent data per school + a robust **school switcher**.
 - Prove the **core workflow** is solid before mobile app build: **Fee collection → Razorpay order → verification/webhook → receipt PDF**.
 - Build a modern, responsive UI (React + shadcn/ui + Tailwind) with role-based UX (Super Admin, Admin, Accountant, Teacher, Parent).
-- Provide fee-first visibility: **fee analytics, receipts, and transaction history** for any selected date range.
+- Provide fee-first visibility: **fee analytics, receipts, transaction history, and downloadable reports** for any selected date range and selected classes/sections.
 - Ensure security, auditability, and “no hard deletes” across modules.
 
 ---
@@ -27,7 +27,7 @@ Steps
 
 Status
 - ✅ Completed earlier as part of MVP integration: Razorpay order generation + server-side PDF receipt generation exists in the FastAPI app.
-- ⚠️ Note: Production-grade online payment capture/finalization is still a future task (see Upcoming).
+- ⚠️ Note: Production-grade online payment capture/finalization is still a future task (see Next Actions).
 
 User stories (Phase 1)
 1. As an accountant, I can create a Razorpay order for ₹5000 and receive a valid order_id.
@@ -100,7 +100,22 @@ Status
   - Backend: `/api/analytics/fees` returns rich `transactions` array scoped to selected date range + filters.
   - Frontend: Analytics shows **“Transactions in Selected Range”** with in-card search, mode filter, pagination (10/25/50/100), CSV download, empty state, colored mode badges.
   - Filters supported: date presets + custom range + class + section + payment mode.
-  - ✅ Tested comprehensively via `testing_agent_v3` (Backend 73/73, Frontend 27/27, no regressions).
+  - ✅ Tested via `testing_agent_v3` (iteration_7: Backend 73/73, Frontend 27/27; no regressions).
+
+- ✅ **Reports Enhancement COMPLETE:** Student Fee Status — multi-class/section + exports.
+  - Backend:
+    - `/api/reports/fee-status` now supports `class_sections` (comma-separated `class_id:section` pairs; blank section means *all* sections of that class).
+    - `min_due` / `max_due` filters removed.
+    - Added export endpoints:
+      - `/api/reports/fee-status.pdf`
+      - `/api/reports/fee-status.xlsx`
+      - `/api/reports/fee-status.csv`
+    - All exports respect `class_sections` and `status_filter`.
+  - Frontend:
+    - Reports > Student Fee Status uses a Popover multi-select (per-class master checkbox + per-section chips) with removable selection chips.
+    - Added download buttons: **PDF / XLSX / CSV**.
+    - Min/Max Due inputs removed.
+  - ✅ Tested via `testing_agent_v3` (iteration_8: Backend 39/39, Frontend 100%; no regressions incl. Fee Collection tab and Analytics transactions).
 
 User stories (Phase 3)
 1. As a teacher, I can mark today’s attendance for my class and it reflects in the dashboard.
@@ -108,6 +123,7 @@ User stories (Phase 3)
 3. As an admin, I can publish a circular with a PDF attachment and schedule it.
 4. As an accountant, I can export monthly collection to Excel/CSV.
 5. As management, I can view pending fees by class/section and drill down to students.
+6. As an accountant/admin, I can select **multiple classes with specific sections** and download a **Student Fee Status** report in **PDF/XLSX/CSV**.
 
 ---
 
@@ -139,17 +155,18 @@ User stories (Phase 4)
 1. **Productionize payments (P1):** finalize Razorpay payment lifecycle for go-live (webhook-driven status updates, idempotency, retries, reconciliation reports). Avoid any real capture during testing.
 2. **Refactor backend structure (P2):** split monolithic `server.py` into FastAPI routers (students, fees, analytics, reports, auth, etc.).
 3. **Resolve pending code-review technical debt (P2):**
-   - Refactor high-complexity functions: `server.py` (`analytics()`, `report_fee_status()`, `dashboard_summary()`), `pdf_utils.py` (`generate_receipt_pdf()`)
-   - Frontend complexity: `AssignFeeDialog.jsx`, `FeeCollection.jsx`, `Reports.jsx`, `EditStudentDialog.jsx`
+   - Refactor high-complexity functions: `server.py` (`analytics()`, `dashboard_summary()`), `pdf_utils.py` (`generate_receipt_pdf()`)
+   - Frontend complexity: `AssignFeeDialog.jsx`, `FeeCollection.jsx`, `EditStudentDialog.jsx`
+   - Note: `Reports.jsx` was rewritten during the fee-status enhancement; keep an eye on modularizing it further if it grows.
 4. **Security hardening (P1/P2):** secure token storage (move from localStorage to httpOnly cookies or equivalent mitigation), tighten CSP, and review XSS exposure.
-5. **Extend reporting:** optionally add exports for the new analytics transactions table (server-side export endpoints, if desired).
+5. **Extend reporting (optional):** server-side export endpoints for Analytics transactions (PDF/XLSX/CSV) and/or “download filtered transactions” for management.
 
 ---
 
 ## 4) Success Criteria
 - Phase 1: Razorpay order creation + signature verification + webhook verification + valid receipt PDF generation works reliably.
 - Phase 2: Multi-school scoping works end-to-end; fee collection (offline + Razorpay) generates immutable receipts + PDFs.
-- Phase 3: Attendance/homework/circulars/reports functional with exports; **analytics includes drill-down transaction history by filter**; no cross-school data leakage.
+- Phase 3: Attendance/homework/circulars/reports functional with exports; **analytics includes drill-down transaction history by filter**; **fee-status reports support multi-class/section selection with PDF/XLSX/CSV exports**; no cross-school data leakage.
 - Phase 4: RBAC enforced on backend and UI; parent portal fully usable; audit logs cover critical operations; regression tests pass.
 
 ---
@@ -159,6 +176,9 @@ User stories (Phase 4)
 - ✅ Role-based access: Super Admin, Admin, Accountant, Teacher, Parent.
 - ✅ Student Management: list/add/edit, scoped per school.
 - ✅ Fee Management: custom assignments, Razorpay order generation, server-side PDF receipt generation.
-- ✅ Analytics: fee-focused KPIs + charts + **transaction history by selected date range** (Task 1 complete).
-- ✅ Testing: `testing_agent_v3` iterations (latest: iteration_7 100% pass; no regressions).
+- ✅ Analytics: fee-focused KPIs + charts + **transaction history by selected date range** (Task 1 complete; tested iteration_7 100% pass).
+- ✅ Reports:
+  - ✅ Fee Collection exports (existing)
+  - ✅ Student Fee Status: **multi-class/section selection**, **Min/Max Due removed**, **PDF/XLSX/CSV exports added** (tested iteration_8 100% pass).
+- ✅ Testing: `testing_agent_v3` iterations (latest: iteration_8 100% pass; no regressions).
 - ⚠️ Deferred: refactors + secure token storage + payment go-live hardening.
