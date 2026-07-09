@@ -70,7 +70,8 @@ class User(BaseDoc):
     role: str  # super_admin|school_admin|accountant|teacher|parent
     school_id: Optional[str] = None  # None for super_admin
     phone: Optional[str] = None
-    linked_student_id: Optional[str] = None  # for parent role
+    linked_student_id: Optional[str] = None  # DEPRECATED: single-child parent (legacy)
+    linked_student_ids: List[str] = Field(default_factory=list)  # parent role: list of children
     linked_class_ids: List[str] = Field(default_factory=list)  # for teacher
     status: str = 'active'
 
@@ -82,7 +83,8 @@ class UserCreate(BaseModel):
     role: str
     school_id: Optional[str] = None
     phone: Optional[str] = None
-    linked_student_id: Optional[str] = None
+    linked_student_id: Optional[str] = None  # legacy single-child support
+    linked_student_ids: List[str] = Field(default_factory=list)  # parent's children
     linked_class_ids: List[str] = Field(default_factory=list)
 
 
@@ -91,14 +93,17 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     school_id: Optional[str] = None
     phone: Optional[str] = None
-    linked_student_id: Optional[str] = None
+    linked_student_id: Optional[str] = None  # legacy
+    linked_student_ids: Optional[List[str]] = None  # replaces the list when provided
     linked_class_ids: Optional[List[str]] = None
     status: Optional[str] = None
     password: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    # Accepts either an email or a mobile number as the identifier.
+    # Frontend still sends `email` for backwards compatibility.
+    email: str
     password: str
 
 

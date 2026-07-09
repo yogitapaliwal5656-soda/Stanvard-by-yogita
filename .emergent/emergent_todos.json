@@ -1,26 +1,34 @@
 [
   {
-    "content": "Backend: update /api/reports/fee-status - remove min_due/max_due, add class_sections multi-filter",
+    "content": "Backend: update User model to support linked_student_ids (list) + preserve backwards compat",
     "status": "completed"
   },
   {
-    "content": "Backend: add /api/reports/fee-status.pdf, .xlsx, .csv endpoints",
+    "content": "Backend: update /auth/login to accept email OR mobile phone as identifier",
     "status": "completed"
   },
   {
-    "content": "Frontend: build multi-select class+section popover in Reports.jsx",
+    "content": "Backend: update all references from linked_student_id to linked_student_ids array (parent access checks)",
     "status": "completed"
   },
   {
-    "content": "Frontend: remove Min/Max Due inputs, add PDF/XLSX/CSV download buttons for fee-status",
+    "content": "Backend: write real_seed.py — wipe demo data across 3 branches, import 375 students into Kanpur, create Super Admin + Accountant + parent accounts",
     "status": "completed"
   },
   {
-    "content": "Test backend endpoints via curl",
+    "content": "Frontend: remove demo credentials block from Login.jsx + support mobile-number login",
     "status": "completed"
   },
   {
-    "content": "Test frontend via screenshot + testing_agent_v3",
+    "content": "Frontend: Users.jsx — multi-select for parent's linked students (search + add/remove chips)",
     "status": "completed"
+  },
+  {
+    "content": "Frontend: Parent Portal — add child switcher for multi-child parents",
+    "status": "completed"
+  },
+  {
+    "content": "Run real_seed and test end-to-end via testing_agent_v3",
+    "status": "in_progress"
   }
 ]

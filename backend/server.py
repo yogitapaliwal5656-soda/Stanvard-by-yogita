@@ -103,11 +103,57 @@ async def health():
 # =====================================================
 # AUTH
 # =====================================================
+def parent_linked_student_ids(user: Dict[str, Any]) -> List[str]:
+    """Return the union of a parent user's linked student IDs.
+
+    Merges the legacy single-child field `linked_student_id` with the
+    multi-child list `linked_student_ids` so that both new and old accounts
+    are supported without migration.
+    """
+    ids = list(user.get('linked_student_ids') or [])
+    legacy = user.get('linked_student_id')
+    if legacy and legacy not in ids:
+        ids.append(legacy)
+    return [i for i in ids if i]
+
+
+def parent_can_access_student(user: Dict[str, Any], student_id: Optional[str]) -> bool:
+    if not student_id:
+        return False
+    return student_id in parent_linked_student_ids(user)
+
+
 @api.post('/auth/login', response_model=LoginResponse)
 async def login(body: LoginRequest, request: Request):
-    user = await users_col.find_one({'email': body.email.lower()}, {'_id': 0})
+    identifier = (body.email or '').strip()
+    if not identifier:
+        raise HTTPException(status_code=400, detail='Email or mobile number is required')
+
+    # 1. Try email match (case-insensitive)
+    user = await users_col.find_one({'email': identifier.lower()}, {'_id': 0})
+
+    # 2. If not found and identifier looks like a phone number, try phone match.
+    #    We accept +91, spaces, dashes, etc. and try both the full-digit string
+    #    and the last 10 digits (Indian mobile) against the stored phone.
+    if not user:
+        digits_only = ''.join(ch for ch in identifier if ch.isdigit())
+        candidates: List[str] = []
+        if digits_only and len(digits_only) >= 7:
+            candidates.append(digits_only)
+            if len(digits_only) > 10:
+                candidates.append(digits_only[-10:])
+        for cand in candidates:
+            # Exact match, then "ends-with" match on stored phone
+            user = await users_col.find_one({'phone': cand}, {'_id': 0})
+            if not user:
+                user = await users_col.find_one(
+                    {'phone': {'$regex': f'{cand}$'}}, {'_id': 0}
+                )
+            if user:
+                break
+
     if not user or not verify_password(body.password, user.get('password_hash', '')):
-        raise HTTPException(status_code=401, detail='Invalid email or password')
+        raise HTTPException(status_code=401, detail='Invalid credentials')
     if user.get('status') != 'active':
         raise HTTPException(status_code=403, detail='Account is inactive')
     token = create_access_token({'sub': user['id'], 'role': user['role']})
@@ -218,6 +264,7 @@ async def create_user(body: UserCreate, current=Depends(get_current_user)):
         school_id=body.school_id,
         phone=body.phone,
         linked_student_id=body.linked_student_id,
+        linked_student_ids=body.linked_student_ids or [],
         linked_class_ids=body.linked_class_ids,
     )
     await users_col.insert_one(u.model_dump())
@@ -259,9 +306,12 @@ async def list_students(request: Request,
                         limit: int = 500):
     sid = resolve_school_id(current, school_id, request.headers.get('X-School-Id'))
     q: Dict[str, Any] = {'school_id': sid}
-    # For parent role, restrict to their linked student
-    if current['role'] == 'parent' and current.get('linked_student_id'):
-        q['id'] = current['linked_student_id']
+    # For parent role, restrict to their linked children
+    if current['role'] == 'parent':
+        child_ids = parent_linked_student_ids(current)
+        if not child_ids:
+            return []
+        q['id'] = {'$in': child_ids}
     if class_id:
         q['class_id'] = class_id
     if section:
@@ -287,7 +337,7 @@ async def get_student(student_id: str, request: Request, current=Depends(get_cur
     # scope check
     if current['role'] != 'super_admin' and s['school_id'] != current.get('school_id'):
         raise HTTPException(403, 'Forbidden')
-    if current['role'] == 'parent' and current.get('linked_student_id') != student_id:
+    if current['role'] == 'parent' and not parent_can_access_student(current, student_id):
         raise HTTPException(403, 'Forbidden')
     return s
 
@@ -437,7 +487,7 @@ async def student_dues(student_id: str, request: Request, current=Depends(get_cu
     student = await students_col.find_one({'id': student_id}, {'_id': 0})
     if not student:
         raise HTTPException(404, 'Student not found')
-    if current['role'] == 'parent' and current.get('linked_student_id') != student_id:
+    if current['role'] == 'parent' and not parent_can_access_student(current, student_id):
         raise HTTPException(403, 'Forbidden')
     assignments = await fee_assignments_col.find({'student_id': student_id}, {'_id': 0}).to_list(50)
     dues = []
@@ -604,7 +654,7 @@ async def razorpay_create_order(body: RazorpayOrderRequest, request: Request,
     student = await students_col.find_one({'id': body.student_id}, {'_id': 0})
     if not student:
         raise HTTPException(404, 'Student not found')
-    if current['role'] == 'parent' and current.get('linked_student_id') != body.student_id:
+    if current['role'] == 'parent' and not parent_can_access_student(current, body.student_id):
         raise HTTPException(403, 'Forbidden')
     subtotal = sum(i.amount for i in body.items)
     total = subtotal + body.late_fee - body.discount
@@ -700,8 +750,11 @@ async def list_payments(request: Request, current=Depends(get_current_user),
                         limit: int = 500):
     sid = resolve_school_id(current, school_id, request.headers.get('X-School-Id'))
     q: Dict[str, Any] = {'school_id': sid}
-    if current['role'] == 'parent' and current.get('linked_student_id'):
-        q['student_id'] = current['linked_student_id']
+    if current['role'] == 'parent':
+        child_ids = parent_linked_student_ids(current)
+        if not child_ids:
+            return []
+        q['student_id'] = {'$in': child_ids}
     if student_id:
         q['student_id'] = student_id
     if mode:
@@ -724,7 +777,7 @@ async def get_payment(payment_id: str, current=Depends(get_current_user)):
         raise HTTPException(404, 'Payment not found')
     if current['role'] != 'super_admin' and p['school_id'] != current.get('school_id'):
         raise HTTPException(403, 'Forbidden')
-    if current['role'] == 'parent' and p['student_id'] != current.get('linked_student_id'):
+    if current['role'] == 'parent' and not parent_can_access_student(current, p.get('student_id')):
         raise HTTPException(403, 'Forbidden')
     return p
 
@@ -736,7 +789,7 @@ async def download_receipt(payment_id: str, current=Depends(get_current_user)):
         raise HTTPException(404, 'Payment not found')
     if current['role'] != 'super_admin' and p['school_id'] != current.get('school_id'):
         raise HTTPException(403, 'Forbidden')
-    if current['role'] == 'parent' and p['student_id'] != current.get('linked_student_id'):
+    if current['role'] == 'parent' and not parent_can_access_student(current, p.get('student_id')):
         raise HTTPException(403, 'Forbidden')
     school = await schools_col.find_one({'id': p['school_id']}, {'_id': 0}) or {}
     student = await students_col.find_one({'id': p['student_id']}, {'_id': 0}) or {}
@@ -804,8 +857,11 @@ async def list_attendance(request: Request, current=Depends(get_current_user),
         q['section'] = section
     if student_id:
         q['student_id'] = student_id
-    if current['role'] == 'parent' and current.get('linked_student_id'):
-        q['student_id'] = current['linked_student_id']
+    if current['role'] == 'parent':
+        child_ids = parent_linked_student_ids(current)
+        if not child_ids:
+            return []
+        q['student_id'] = {'$in': child_ids}
     if start_date or end_date:
         rq: Dict[str, Any] = {}
         if start_date:
@@ -831,12 +887,18 @@ async def list_homework(request: Request, current=Depends(get_current_user),
         q['class_id'] = class_id
     if section:
         q['section'] = section
-    if current['role'] == 'parent' and current.get('linked_student_id'):
-        student = await students_col.find_one({'id': current['linked_student_id']}, {'_id': 0})
-        if student and student.get('class_id'):
-            q['class_id'] = student['class_id']
-            if student.get('section'):
-                q['section'] = student['section']
+    if current['role'] == 'parent':
+        child_ids = parent_linked_student_ids(current)
+        if not child_ids:
+            return []
+        # Homework is class-scoped; pull the child's classes and match
+        children = await students_col.find(
+            {'id': {'$in': child_ids}}, {'_id': 0, 'class_id': 1, 'section': 1}
+        ).to_list(100)
+        class_ids = list({c.get('class_id') for c in children if c.get('class_id')})
+        if not class_ids:
+            return []
+        q['class_id'] = {'$in': class_ids}
     rows = await homework_col.find(q, {'_id': 0}).sort('created_at', -1).limit(500).to_list(500)
     return rows
 
@@ -965,8 +1027,9 @@ async def list_notifications(request: Request, current=Depends(get_current_user)
     q: Dict[str, Any] = {'school_id': sid}
     # audience filter for role-scoped users
     if current['role'] == 'parent':
+        child_ids = parent_linked_student_ids(current)
         q['$or'] = [{'audience': 'all'}, {'audience': 'parents'},
-                    {'student_ids': current.get('linked_student_id')}]
+                    {'student_ids': {'$in': child_ids}} if child_ids else {'student_ids': None}]
     elif current['role'] == 'teacher':
         q['$or'] = [{'audience': 'all'}, {'audience': 'teachers'}]
     return await notifications_col.find(q, {'_id': 0}).sort('created_at', -1).limit(200).to_list(200)
@@ -1863,7 +1926,7 @@ async def student_fee_report(student_id: str, request: Request, current=Depends(
         raise HTTPException(404, 'Student not found')
     if current['role'] != 'super_admin' and student['school_id'] != current.get('school_id'):
         raise HTTPException(403, 'Forbidden')
-    if current['role'] == 'parent' and current.get('linked_student_id') != student_id:
+    if current['role'] == 'parent' and not parent_can_access_student(current, student_id):
         raise HTTPException(403, 'Forbidden')
 
     assignments = await fee_assignments_col.find({'student_id': student_id}, {'_id': 0}).to_list(50)

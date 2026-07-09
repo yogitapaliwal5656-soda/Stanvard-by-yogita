@@ -9,39 +9,43 @@ import { Badge } from '@/components/ui/badge';
 import { Wallet, IndianRupee, CreditCard } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
+import { useChild } from '@/contexts/ChildContext';
+import { ChildSwitcher } from '@/components/ChildSwitcher';
 
 export default function ParentPay() {
   const { user } = useAuth();
+  const { activeChild, activeChildId, children } = useChild();
   const [dues, setDues] = useState(null);
   const [items, setItems] = useState([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!user?.linked_student_id) return;
+    if (!activeChildId) { setDues(null); setItems([]); return; }
     (async () => {
-      const { data } = await api.get(`/fees/student/${user.linked_student_id}/dues`);
+      const { data } = await api.get(`/fees/student/${activeChildId}/dues`);
       setDues(data);
       const now = new Date();
       const monthLabel = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
       setItems((data.dues || []).slice(0, 6).map((d, i) => ({
         key: `pp-${d.fee_head_id || 'x'}-${i}`,
         fee_head_id: d.fee_head_id, fee_head_name: d.fee_head_name,
-        period: d.frequency === 'yearly' ? '2025-26' : monthLabel,
+        period: d.frequency === 'yearly' ? '2026-27' : monthLabel,
         amount: d.amount, selected: true,
         due_date: d.due_date,
       })));
     })();
-  }, [user]);
+  }, [activeChildId]);
 
   const activeItems = items.filter((i) => i.selected);
   const total = activeItems.reduce((s, i) => s + Number(i.amount || 0), 0);
 
   const pay = async () => {
     if (activeItems.length === 0) return toast.error('Select at least one item');
+    if (!activeChildId) return toast.error('Please select a child first');
     setSaving(true);
     try {
       const { data: order } = await api.post('/payments/razorpay/order', {
-        student_id: user.linked_student_id,
+        student_id: activeChildId,
         items: activeItems.map((i) => ({ fee_head_id: i.fee_head_id, fee_head_name: i.fee_head_name, period: i.period, amount: Number(i.amount) })),
         discount: 0, late_fee: 0,
       });
@@ -76,10 +80,23 @@ export default function ParentPay() {
 
   return (
     <AppShell>
-      <div className="mb-6">
-        <h1 className="h-font text-2xl font-semibold">Pay Fees</h1>
-        <p className="text-sm text-muted-foreground">Review and pay pending fees securely.</p>
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="h-font text-2xl font-semibold">Pay Fees</h1>
+          <p className="text-sm text-muted-foreground">
+            {activeChild
+              ? `Review and pay pending fees for ${activeChild.full_name} (${activeChild.admission_number}).`
+              : 'Select a child to view their pending fees.'}
+          </p>
+        </div>
+        {children.length > 0 && <ChildSwitcher />}
       </div>
+      {!activeChild && (
+        <Card className="p-6 border-border text-center text-sm text-muted-foreground" data-testid="parent-pay-no-child">
+          Your account has no linked children. Please contact the school office.
+        </Card>
+      )}
+      {activeChild && (
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="xl:col-span-2">
           <Card className="p-5 border-border">
@@ -112,6 +129,7 @@ export default function ParentPay() {
           </Card>
         </div>
       </div>
+      )}
     </AppShell>
   );
 }

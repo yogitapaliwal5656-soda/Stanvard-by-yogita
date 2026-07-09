@@ -5,6 +5,7 @@ import { Toaster } from '@/components/ui/sonner';
 
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { SchoolProvider } from '@/contexts/SchoolContext';
+import { ChildProvider } from '@/contexts/ChildContext';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 
 import Login from '@/pages/Login';
@@ -47,7 +48,8 @@ function App() {
   return (
     <AuthProvider>
       <SchoolProvider>
-        <BrowserRouter>
+        <ChildProvider>
+          <BrowserRouter>
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/" element={<ProtectedRoute><HomeRedirect /></ProtectedRoute>} />
@@ -89,6 +91,7 @@ function App() {
           </Routes>
           <Toaster position="top-right" richColors closeButton />
         </BrowserRouter>
+        </ChildProvider>
       </SchoolProvider>
     </AuthProvider>
   );

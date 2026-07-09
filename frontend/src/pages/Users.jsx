@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AppShell } from '@/components/layout/AppShell';
 import { api } from '@/lib/api';
 import { Card } from '@/components/ui/card';
@@ -10,11 +10,18 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Plus, User as UserIcon, Pencil, Trash2, KeyRound, Search } from 'lucide-react';
+import { Plus, User as UserIcon, Pencil, Trash2, KeyRound, Search, X, UsersRound } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
 
 const ROLES = ['super_admin', 'school_admin', 'accountant', 'teacher', 'parent'];
+
+// Merge legacy `linked_student_id` with `linked_student_ids` for backwards compat.
+const mergedChildIds = (u) => {
+  const ids = new Set(u?.linked_student_ids || []);
+  if (u?.linked_student_id) ids.add(u.linked_student_id);
+  return Array.from(ids).filter(Boolean);
+};
 
 export default function UsersPage() {
   const { user } = useAuth();
@@ -86,7 +93,22 @@ export default function UsersPage() {
                 <TableCell><Badge variant="secondary" className="capitalize">{(u.role || '').replace('_', ' ')}</Badge></TableCell>
                 <TableCell>{schoolMap[u.school_id] || '—'}</TableCell>
                 <TableCell className="text-xs text-muted-foreground">
-                  {u.role === 'parent' && u.linked_student_id ? studentMap[u.linked_student_id] || '—' : '—'}
+                  {u.role === 'parent' ? (() => {
+                    const ids = mergedChildIds(u);
+                    if (ids.length === 0) return '—';
+                    const names = ids.map((sid) => studentMap[sid]).filter(Boolean);
+                    const first = names[0] || '—';
+                    return ids.length > 1 ? (
+                      <span title={names.join(', ')}>
+                        <b>{first}</b>
+                        <Badge variant="secondary" className="ml-1 text-[10px]">+{ids.length - 1}</Badge>
+                      </span>
+                    ) : first;
+                  })() : (
+                    u.role === 'teacher' && (u.linked_class_ids || []).length > 0
+                      ? `${u.linked_class_ids.length} class${u.linked_class_ids.length === 1 ? '' : 'es'}`
+                      : '—'
+                  )}
                 </TableCell>
                 <TableCell><Badge className={u.status === 'active' ? 'bg-[#E6F6F4] text-[#0F766E] border border-[#BFEAE6]' : 'bg-secondary'}>{u.status}</Badge></TableCell>
                 <TableCell className="text-right">
@@ -117,34 +139,71 @@ export default function UsersPage() {
 }
 
 function UserFormDialog({ open, onOpenChange, schools, students, isSuper, editUser, onSaved }) {
-  const [form, setForm] = useState({ email: '', password: '', full_name: '', role: 'teacher', school_id: '', phone: '', linked_student_id: '' });
+  const [form, setForm] = useState({ email: '', password: '', full_name: '', role: 'teacher', school_id: '', phone: '', linked_student_ids: [] });
   const [saving, setSaving] = useState(false);
+  const [childSearch, setChildSearch] = useState('');
 
   useEffect(() => {
     if (editUser) {
       setForm({
         email: editUser.email, password: '', full_name: editUser.full_name || '',
         role: editUser.role, school_id: editUser.school_id || '',
-        phone: editUser.phone || '', linked_student_id: editUser.linked_student_id || '',
+        phone: editUser.phone || '', linked_student_ids: mergedChildIds(editUser),
       });
     } else if (open) {
-      setForm({ email: '', password: '', full_name: '', role: 'teacher', school_id: '', phone: '', linked_student_id: '' });
+      setForm({ email: '', password: '', full_name: '', role: 'teacher', school_id: '', phone: '', linked_student_ids: [] });
     }
+    setChildSearch('');
   }, [editUser, open]);
 
   const filteredStudents = students.filter((s) => !form.school_id || s.school_id === form.school_id);
+  const linkedStudents = useMemo(
+    () => form.linked_student_ids.map((id) => students.find((s) => s.id === id)).filter(Boolean),
+    [form.linked_student_ids, students],
+  );
+  const searchLower = childSearch.trim().toLowerCase();
+  const suggestions = useMemo(() => {
+    if (!searchLower) return [];
+    const selected = new Set(form.linked_student_ids);
+    return filteredStudents
+      .filter((s) => !selected.has(s.id))
+      .filter((s) => (
+        (s.full_name || '').toLowerCase().includes(searchLower) ||
+        (s.admission_number || '').toLowerCase().includes(searchLower) ||
+        (s.father_name || '').toLowerCase().includes(searchLower) ||
+        (s.phone || '').toLowerCase().includes(searchLower)
+      ))
+      .slice(0, 8);
+  }, [searchLower, filteredStudents, form.linked_student_ids]);
+
+  const addChild = (student) => {
+    if (form.linked_student_ids.includes(student.id)) return;
+    setForm((f) => ({ ...f, linked_student_ids: [...f.linked_student_ids, student.id] }));
+    setChildSearch('');
+  };
+  const removeChild = (studentId) => {
+    setForm((f) => ({ ...f, linked_student_ids: f.linked_student_ids.filter((id) => id !== studentId) }));
+  };
 
   const submit = async (e) => {
     e.preventDefault();
     setSaving(true);
     try {
       if (editUser) {
-        const payload = { full_name: form.full_name, role: form.role, school_id: form.school_id || null, phone: form.phone, linked_student_id: form.linked_student_id || null };
+        const payload = {
+          full_name: form.full_name,
+          role: form.role,
+          school_id: form.school_id || null,
+          phone: form.phone,
+          linked_student_ids: form.role === 'parent' ? form.linked_student_ids : [],
+        };
         if (form.password) payload.password = form.password;
         await api.patch(`/users/${editUser.id}`, payload);
         toast.success('User updated');
       } else {
-        await api.post('/users', form);
+        const payload = { ...form };
+        if (form.role !== 'parent') payload.linked_student_ids = [];
+        await api.post('/users', payload);
         toast.success('User created');
       }
       onOpenChange(false); onSaved();
@@ -178,17 +237,74 @@ function UserFormDialog({ open, onOpenChange, schools, students, isSuper, editUs
               </div>
             )}
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="grid gap-1.5"><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
-            {form.role === 'parent' && (
-              <div className="grid gap-1.5"><Label>Linked Student</Label>
-                <Select value={form.linked_student_id} onValueChange={(v) => setForm({ ...form, linked_student_id: v })}>
-                  <SelectTrigger><SelectValue placeholder="Select student" /></SelectTrigger>
-                  <SelectContent className="max-h-64">{filteredStudents.slice(0, 200).map((s) => <SelectItem key={s.id} value={s.id}>{s.full_name} ({s.admission_number})</SelectItem>)}</SelectContent>
-                </Select>
-              </div>
-            )}
+          <div className="grid gap-1.5">
+            <Label>Phone {form.role === 'parent' && <span className="text-xs text-muted-foreground">(used as parent login username)</span>}</Label>
+            <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} data-testid="user-form-phone" />
           </div>
+
+          {form.role === 'parent' && (
+            <div className="grid gap-2 rounded-md border border-border bg-secondary/30 p-3">
+              <div className="flex items-center gap-2">
+                <UsersRound className="h-4 w-4 text-[hsl(var(--primary))]" />
+                <Label className="text-sm font-medium">Linked Children ({linkedStudents.length})</Label>
+              </div>
+              <p className="text-xs text-muted-foreground -mt-1">
+                Search and add every child that belongs to this parent — one account can hold multiple siblings.
+              </p>
+
+              {linkedStudents.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {linkedStudents.map((s) => (
+                    <Badge key={s.id} variant="secondary" className="gap-1 pl-2 pr-1 h-6 text-xs" data-testid={`parent-child-chip-${s.id}`}>
+                      {s.full_name}
+                      <span className="text-muted-foreground">· {s.admission_number}</span>
+                      <button
+                        type="button" onClick={() => removeChild(s.id)}
+                        className="ml-0.5 rounded p-0.5 hover:bg-muted"
+                        aria-label={`Remove ${s.full_name}`}
+                        data-testid={`parent-child-remove-${s.id}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+              )}
+
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  className="pl-9"
+                  placeholder="Search by name, admission no, father, phone…"
+                  value={childSearch}
+                  onChange={(e) => setChildSearch(e.target.value)}
+                  data-testid="parent-child-search"
+                />
+                {suggestions.length > 0 && (
+                  <div className="absolute z-30 left-0 right-0 mt-1 bg-popover border border-border rounded-md shadow-md max-h-56 overflow-y-auto">
+                    {suggestions.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => addChild(s)}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-secondary flex items-center justify-between gap-2 border-b border-border/50 last:border-0"
+                        data-testid={`parent-child-suggestion-${s.id}`}
+                      >
+                        <div>
+                          <div className="font-medium">{s.full_name}</div>
+                          <div className="text-xs text-muted-foreground">{s.admission_number} · {s.father_name || '—'} · {s.phone || '—'}</div>
+                        </div>
+                        <Plus className="h-3.5 w-3.5 text-[hsl(var(--primary))]" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {linkedStudents.length === 0 && (
+                <p className="text-xs text-[#B45309]">This parent has no children linked yet — they won't see anything after login.</p>
+              )}
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" type="button" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button type="submit" disabled={saving} data-testid="user-form-submit">{saving ? 'Saving…' : editUser ? 'Save Changes' : 'Create User'}</Button>
