@@ -60,7 +60,8 @@ export default function FeeCollection() {
       // Pre-fill items with plan items (current month)
       const now = new Date();
       const monthLabel = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-      setItems((data.dues || []).slice(0, 3).map((d) => ({
+      setItems((data.dues || []).slice(0, 3).map((d, i) => ({
+        key: `pre-${d.fee_head_id || 'x'}-${i}`,
         fee_head_id: d.fee_head_id, fee_head_name: d.fee_head_name,
         period: d.frequency === 'yearly' ? '2025-26' : monthLabel,
         amount: d.amount, selected: true,
@@ -68,13 +69,10 @@ export default function FeeCollection() {
     })();
   }, [studentId]);
 
-  const toggleItem = (i) => {
-    const next = [...items]; next[i].selected = !next[i].selected; setItems(next);
-  };
-  const updateAmount = (i, v) => {
-    const next = [...items]; next[i].amount = Number(v); setItems(next);
-  };
-  const removeItem = (i) => setItems(items.filter((_, idx) => idx !== i));
+  const toggleItem = (key) => setItems((prev) => prev.map((it) => it.key === key ? { ...it, selected: !it.selected } : it));
+  const updateAmount = (key, v) => setItems((prev) => prev.map((it) => it.key === key ? { ...it, amount: Number(v) } : it));
+  const updateField = (key, field, v) => setItems((prev) => prev.map((it) => it.key === key ? { ...it, [field]: v } : it));
+  const removeItem = (key) => setItems((prev) => prev.filter((it) => it.key !== key));
   const activeItems = items.filter((i) => i.selected);
   const subtotal = activeItems.reduce((s, i) => s + Number(i.amount || 0), 0);
   const total = subtotal + Number(lateFee || 0) - Number(discount || 0);
@@ -190,20 +188,20 @@ export default function FeeCollection() {
           <Card className="p-5 border-border">
             <div className="flex items-center justify-between mb-3">
               <div className="text-sm font-medium">Fee Items</div>
-              <Button type="button" variant="outline" size="sm" onClick={() => setItems([...items, { fee_head_name: 'Custom', period: '', amount: 0, selected: true }])}>+ Add Item</Button>
+              <Button type="button" variant="outline" size="sm" onClick={() => setItems([...items, { key: `add-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, fee_head_name: 'Custom', period: '', amount: 0, selected: true }])}>+ Add Item</Button>
             </div>
             {items.length === 0 && <div className="py-6 text-sm text-muted-foreground text-center">Select a student to load fee items.</div>}
             <div className="divide-y divide-border">
-              {items.map((it, i) => (
-                <div key={i} className="py-3 grid grid-cols-12 items-center gap-2">
-                  <input type="checkbox" checked={it.selected} onChange={() => toggleItem(i)} className="col-span-1" />
-                  <Input className="col-span-5" value={it.fee_head_name} onChange={(e) => { const nx = [...items]; nx[i].fee_head_name = e.target.value; setItems(nx); }} />
-                  <Input className="col-span-3" placeholder="Period" value={it.period} onChange={(e) => { const nx = [...items]; nx[i].period = e.target.value; setItems(nx); }} />
+              {items.map((it) => (
+                <div key={it.key} className="py-3 grid grid-cols-12 items-center gap-2">
+                  <input type="checkbox" checked={it.selected} onChange={() => toggleItem(it.key)} className="col-span-1" />
+                  <Input className="col-span-5" value={it.fee_head_name} onChange={(e) => updateField(it.key, 'fee_head_name', e.target.value)} />
+                  <Input className="col-span-3" placeholder="Period" value={it.period} onChange={(e) => updateField(it.key, 'period', e.target.value)} />
                   <div className="col-span-2 relative">
                     <IndianRupee className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                    <Input className="pl-7 tabular-nums text-right" type="number" value={it.amount} onChange={(e) => updateAmount(i, e.target.value)} />
+                    <Input className="pl-7 tabular-nums text-right" type="number" value={it.amount} onChange={(e) => updateAmount(it.key, e.target.value)} />
                   </div>
-                  <button className="col-span-1 text-muted-foreground hover:text-destructive" onClick={() => removeItem(i)}><Trash2 className="h-3.5 w-3.5" /></button>
+                  <button className="col-span-1 text-muted-foreground hover:text-destructive" onClick={() => removeItem(it.key)}><Trash2 className="h-3.5 w-3.5" /></button>
                 </div>
               ))}
             </div>

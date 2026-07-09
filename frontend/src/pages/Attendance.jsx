@@ -26,7 +26,7 @@ export default function Attendance() {
     if (!activeSchoolId) return;
     const { data } = await api.get('/classes');
     setClasses(data);
-    if (data.length && !classId) setClassId(data[0].id);
+    setClassId((prev) => prev || (data[0]?.id ?? ''));
   }, [activeSchoolId]);
   useEffect(() => { loadClasses(); }, [loadClasses]);
   useEffect(() => {

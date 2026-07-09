@@ -17,7 +17,7 @@ export default function TimetablePage() {
   const load = useCallback(async () => {
     if (!activeSchoolId) return;
     const { data } = await api.get('/classes'); setClasses(data);
-    if (data.length && !classId) setClassId(data[0].id);
+    setClassId((prev) => prev || (data[0]?.id ?? ''));
   }, [activeSchoolId]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {

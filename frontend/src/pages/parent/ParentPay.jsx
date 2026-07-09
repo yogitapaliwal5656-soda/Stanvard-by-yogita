@@ -23,7 +23,8 @@ export default function ParentPay() {
       setDues(data);
       const now = new Date();
       const monthLabel = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-      setItems((data.dues || []).slice(0, 6).map((d) => ({
+      setItems((data.dues || []).slice(0, 6).map((d, i) => ({
+        key: `pp-${d.fee_head_id || 'x'}-${i}`,
         fee_head_id: d.fee_head_id, fee_head_name: d.fee_head_name,
         period: d.frequency === 'yearly' ? '2025-26' : monthLabel,
         amount: d.amount, selected: true,
@@ -84,9 +85,9 @@ export default function ParentPay() {
           <Card className="p-5 border-border">
             <div className="font-medium mb-3">Select Fee Items</div>
             {items.length === 0 && <div className="py-6 text-sm text-muted-foreground text-center">Loading fee details…</div>}
-            {items.map((it, i) => (
-              <label key={i} className="flex items-center gap-3 py-3 border-t border-border first:border-t-0 cursor-pointer">
-                <input type="checkbox" checked={it.selected} onChange={() => { const nx = [...items]; nx[i].selected = !nx[i].selected; setItems(nx); }} />
+            {items.map((it) => (
+              <label key={it.key} className="flex items-center gap-3 py-3 border-t border-border first:border-t-0 cursor-pointer">
+                <input type="checkbox" checked={it.selected} onChange={() => setItems((prev) => prev.map((x) => x.key === it.key ? { ...x, selected: !x.selected } : x))} />
                 <div className="flex-1">
                   <div className="font-medium">{it.fee_head_name}</div>
                   <div className="text-xs text-muted-foreground">{it.period} {it.due_date && <span className="ml-1 text-[#B45309]">• Due by {it.due_date}</span>}</div>

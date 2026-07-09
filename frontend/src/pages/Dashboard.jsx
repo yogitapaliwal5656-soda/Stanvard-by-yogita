@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { AppShell } from '@/components/layout/AppShell';
 import { api, money, shortMoney } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -33,21 +33,21 @@ export default function Dashboard() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!activeSchoolId) return;
     setLoading(true);
     try {
       const { data: d } = await api.get('/dashboard/summary');
       setData(d);
     } finally { setLoading(false); }
-  };
+  }, [activeSchoolId]);
 
-  useEffect(() => { load(); }, [activeSchoolId]);
+  useEffect(() => { load(); }, [activeSchoolId, load]);
   useEffect(() => {
     const h = () => load();
     window.addEventListener('stv:school-changed', h);
     return () => window.removeEventListener('stv:school-changed', h);
-  }, []);
+  }, [load]);
 
   const trend = data?.collection_trend || [];
   const attendancePie = data ? [

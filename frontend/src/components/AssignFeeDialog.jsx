@@ -24,7 +24,7 @@ export function AssignFeeDialog({ open, onOpenChange, student, feePlans, feeHead
     if (existingAssignment) {
       setMode(existingAssignment.custom_items?.length ? 'custom' : 'plan');
       setPlanId(existingAssignment.fee_plan_id || '');
-      setItems(existingAssignment.custom_items || []);
+      setItems((existingAssignment.custom_items || []).map((it, i) => ({ ...it, key: it.key || `it-existing-${i}` })));
       setDiscountPercent(existingAssignment.discount_percent || 0);
       setDiscountAmount(existingAssignment.discount_amount || 0);
       setDueDate(existingAssignment.due_date || '');
@@ -35,9 +35,9 @@ export function AssignFeeDialog({ open, onOpenChange, student, feePlans, feeHead
     }
   }, [existingAssignment, open]);
 
-  const addItem = () => setItems([...items, { fee_head_name: '', amount: 0, frequency: 'monthly', due_date: dueDate }]);
-  const removeItem = (i) => setItems(items.filter((_, idx) => idx !== i));
-  const upd = (i, k, v) => { const nx = [...items]; nx[i] = { ...nx[i], [k]: v }; setItems(nx); };
+  const addItem = () => setItems([...items, { key: `it-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, fee_head_name: '', amount: 0, frequency: 'monthly', due_date: dueDate }]);
+  const removeItem = (key) => setItems(items.filter((it) => it.key !== key));
+  const upd = (key, k, v) => setItems((prev) => prev.map((it) => it.key === key ? { ...it, [k]: v } : it));
 
   const selectedPlan = feePlans.find((p) => p.id === planId);
   const planTotal = (selectedPlan?.items || []).reduce((s, it) => s + Number(it.amount || 0), 0);
@@ -113,8 +113,8 @@ export function AssignFeeDialog({ open, onOpenChange, student, feePlans, feeHead
                 <Card className="p-3 border-border mt-2 text-xs">
                   <div className="font-medium mb-1">{selectedPlan.items?.length} items • Total {money(planTotal)}</div>
                   <div className="text-muted-foreground space-y-0.5">
-                    {(selectedPlan.items || []).slice(0, 5).map((it, i) => (
-                      <div key={i}>{it.fee_head_name} – {money(it.amount)} ({it.frequency})</div>
+                    {(selectedPlan.items || []).slice(0, 5).map((it) => (
+                      <div key={`${it.fee_head_id || it.fee_head_name}-${it.frequency}`}>{it.fee_head_name} – {money(it.amount)} ({it.frequency})</div>
                     ))}
                   </div>
                 </Card>
@@ -130,16 +130,16 @@ export function AssignFeeDialog({ open, onOpenChange, student, feePlans, feeHead
               </div>
               {items.length === 0 && <div className="text-xs text-muted-foreground py-2">No items yet. Click Add Item.</div>}
               <div className="space-y-2">
-                {items.map((it, i) => (
-                  <div key={i} className="grid grid-cols-12 gap-2 items-center">
-                    <Input className="col-span-4" placeholder="Fee name" value={it.fee_head_name} onChange={(e) => upd(i, 'fee_head_name', e.target.value)} />
-                    <Input className="col-span-3" type="number" placeholder="Amount" value={it.amount} onChange={(e) => upd(i, 'amount', e.target.value)} />
-                    <Select value={it.frequency} onValueChange={(v) => upd(i, 'frequency', v)}>
+                {items.map((it) => (
+                  <div key={it.key} className="grid grid-cols-12 gap-2 items-center">
+                    <Input className="col-span-4" placeholder="Fee name" value={it.fee_head_name} onChange={(e) => upd(it.key, 'fee_head_name', e.target.value)} />
+                    <Input className="col-span-3" type="number" placeholder="Amount" value={it.amount} onChange={(e) => upd(it.key, 'amount', e.target.value)} />
+                    <Select value={it.frequency} onValueChange={(v) => upd(it.key, 'frequency', v)}>
                       <SelectTrigger className="col-span-2"><SelectValue /></SelectTrigger>
                       <SelectContent>{['monthly', 'quarterly', 'yearly', 'one_time'].map((f) => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
                     </Select>
-                    <Input className="col-span-2" type="date" value={it.due_date || ''} onChange={(e) => upd(i, 'due_date', e.target.value)} />
-                    <button type="button" className="col-span-1 text-muted-foreground hover:text-destructive" onClick={() => removeItem(i)}><Trash2 className="h-4 w-4" /></button>
+                    <Input className="col-span-2" type="date" value={it.due_date || ''} onChange={(e) => upd(it.key, 'due_date', e.target.value)} />
+                    <button type="button" className="col-span-1 text-muted-foreground hover:text-destructive" onClick={() => removeItem(it.key)}><Trash2 className="h-4 w-4" /></button>
                   </div>
                 ))}
               </div>

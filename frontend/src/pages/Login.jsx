@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card } from '@/components/ui/card';
@@ -7,14 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { GraduationCap, ShieldCheck, Building2, CreditCard } from 'lucide-react';
 import { toast } from 'sonner';
-
-const demoAccounts = [
-  { role: 'Super Admin', email: 'superadmin@stanvard.school', password: 'super123' },
-  { role: 'School Admin (GN)', email: 'admin.gn@stanvard.school', password: 'admin123' },
-  { role: 'Accountant (GN)', email: 'accountant.gn@stanvard.school', password: 'acc123' },
-  { role: 'Teacher (GN)', email: 'teacher.gn@stanvard.school', password: 'teacher123' },
-  { role: 'Parent (GN)', email: 'parent.gn20250001@stanvard.school', password: 'parent123' },
-];
+import { getDemoAccounts, DEMO_ACCOUNTS_ENABLED } from '@/config/demoAccounts';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -23,6 +16,7 @@ export default function Login() {
   const { login } = useAuth();
   const nav = useNavigate();
   const loc = useLocation();
+  const demoAccounts = useMemo(() => getDemoAccounts(), []);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -111,21 +105,23 @@ export default function Login() {
             </Button>
           </form>
 
-          <div className="mt-6 pt-6 border-t border-border">
-            <div className="text-xs font-medium text-muted-foreground mb-2">Demo accounts — tap to fill</div>
-            <div className="grid gap-1.5">
-              {demoAccounts.map((a) => (
-                <button
-                  key={a.email} type="button" onClick={() => fillDemo(a)}
-                  data-testid={`demo-${a.role.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}
-                  className="text-left text-xs px-3 py-2 rounded-md border border-border hover:bg-secondary transition-colors"
-                >
-                  <span className="font-medium text-foreground">{a.role}</span>
-                  <span className="text-muted-foreground ml-2">{a.email}</span>
-                </button>
-              ))}
+          {DEMO_ACCOUNTS_ENABLED && demoAccounts.length > 0 && (
+            <div className="mt-6 pt-6 border-t border-border">
+              <div className="text-xs font-medium text-muted-foreground mb-2">Demo accounts — tap to fill</div>
+              <div className="grid gap-1.5">
+                {demoAccounts.map((a) => (
+                  <button
+                    key={a.id} type="button" onClick={() => fillDemo(a)}
+                    data-testid={`demo-${a.id}`}
+                    className="text-left text-xs px-3 py-2 rounded-md border border-border hover:bg-secondary transition-colors"
+                  >
+                    <span className="font-medium text-foreground">{a.role}</span>
+                    <span className="text-muted-foreground ml-2">{a.email}</span>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </Card>
       </div>
     </div>
