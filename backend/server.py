@@ -1372,15 +1372,45 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
                             school_id: Optional[str] = None,
                             class_id: Optional[str] = None,
                             section: Optional[str] = None,
-                            status_filter: Optional[str] = None,  # paid|partial|unpaid
-                            min_due: Optional[float] = None,
-                            max_due: Optional[float] = None):
+                            class_sections: Optional[str] = None,
+                            status_filter: Optional[str] = None):  # paid|partial|unpaid
+    """Student fee status report.
+
+    Supports both:
+      - Legacy single-filter: `class_id` + `section` (kept for backwards compatibility)
+      - New multi-select: `class_sections` = comma-separated pairs like
+        "<class_id>:<section>,<class_id>:,<class_id>:A"
+        A blank section (e.g. "abc:") means "all sections of that class".
+    """
     sid = resolve_school_id(current, school_id, request.headers.get('X-School-Id'))
+
+    # Parse the multi-select class/section pairs (if provided)
+    cs_pairs: List[Dict[str, Optional[str]]] = []
+    if class_sections:
+        for token in class_sections.split(','):
+            token = token.strip()
+            if not token:
+                continue
+            if ':' in token:
+                cid, sec = token.split(':', 1)
+                cs_pairs.append({'class_id': cid.strip(), 'section': (sec.strip() or None)})
+            else:
+                cs_pairs.append({'class_id': token, 'section': None})
+
     student_q: Dict[str, Any] = {'school_id': sid, 'status': 'active'}
-    if class_id:
-        student_q['class_id'] = class_id
-    if section:
-        student_q['section'] = section
+    if cs_pairs:
+        or_clauses: List[Dict[str, Any]] = []
+        for p in cs_pairs:
+            clause: Dict[str, Any] = {'class_id': p['class_id']}
+            if p['section']:
+                clause['section'] = p['section']
+            or_clauses.append(clause)
+        student_q['$or'] = or_clauses
+    else:
+        if class_id:
+            student_q['class_id'] = class_id
+        if section:
+            student_q['section'] = section
     students = await students_col.find(student_q, {'_id': 0}).to_list(5000)
 
     # Build class map
@@ -1427,10 +1457,6 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
         row_status = 'unpaid' if paid == 0 else ('paid' if due <= 0 else 'partial')
         if status_filter and status_filter != row_status:
             continue
-        if min_due is not None and due < min_due:
-            continue
-        if max_due is not None and due > max_due:
-            continue
         rows.append({
             'student_id': s['id'],
             'admission_number': s.get('admission_number'),
@@ -1463,6 +1489,150 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
             'unpaid_count': sum(1 for r in rows if r['status'] == 'unpaid'),
         }
     }
+
+
+# ------- Fee-status export endpoints (PDF / XLSX / CSV) -------
+
+def _fee_status_export_columns() -> List[str]:
+    return ['Admission No', 'Student', 'Class', 'Section', 'Guardian', 'Phone',
+            'Expected (Rs.)', 'Discount (Rs.)', 'Paid (Rs.)', 'Due (Rs.)', 'Due Date', 'Status']
+
+
+def _fee_status_row_to_list(r: Dict[str, Any]) -> List[Any]:
+    return [
+        r.get('admission_number') or '',
+        r.get('full_name') or '',
+        r.get('class_name') or '',
+        r.get('section') or '',
+        r.get('father_name') or '',
+        r.get('phone') or '',
+        f"{r.get('expected', 0):,.2f}",
+        f"{r.get('discount', 0):,.2f}",
+        f"{r.get('paid', 0):,.2f}",
+        f"{r.get('due', 0):,.2f}",
+        r.get('due_date') or '',
+        (r.get('status') or '').title(),
+    ]
+
+
+@api.get('/reports/fee-status.pdf')
+async def report_fee_status_pdf(request: Request, current=Depends(get_current_user),
+                                school_id: Optional[str] = None,
+                                class_id: Optional[str] = None,
+                                section: Optional[str] = None,
+                                class_sections: Optional[str] = None,
+                                status_filter: Optional[str] = None):
+    data = await report_fee_status(request, current, school_id, class_id, section, class_sections, status_filter)
+    sid = resolve_school_id(current, school_id, request.headers.get('X-School-Id'))
+    school = await schools_col.find_one({'id': sid}, {'_id': 0}) or {}
+    rows = [_fee_status_row_to_list(r) for r in data['rows']]
+    subtitle_bits: List[str] = []
+    if class_sections:
+        subtitle_bits.append(f"Classes/Sections: {class_sections}")
+    if status_filter:
+        subtitle_bits.append(f"Status: {status_filter}")
+    subtitle = ' | '.join(subtitle_bits) if subtitle_bits else 'All Classes / Sections'
+    summary = {
+        'Students': data['count'],
+        'Total Expected': f"Rs. {data['summary']['total_expected']:,.2f}",
+        'Total Paid': f"Rs. {data['summary']['total_paid']:,.2f}",
+        'Total Due': f"Rs. {data['summary']['total_due']:,.2f}",
+        'Paid / Partial / Unpaid': (
+            f"{data['summary']['paid_count']} / {data['summary']['partial_count']} / {data['summary']['unpaid_count']}"
+        ),
+    }
+    pdf = generate_report_pdf('Student Fee Status Report', subtitle,
+                              _fee_status_export_columns(), rows,
+                              school.get('name', 'Stanvard School'), summary)
+    return StreamingResponse(io.BytesIO(pdf), media_type='application/pdf',
+                             headers={'Content-Disposition': 'inline; filename="fee_status_report.pdf"'})
+
+
+@api.get('/reports/fee-status.xlsx')
+async def report_fee_status_xlsx(request: Request, current=Depends(get_current_user),
+                                 school_id: Optional[str] = None,
+                                 class_id: Optional[str] = None,
+                                 section: Optional[str] = None,
+                                 class_sections: Optional[str] = None,
+                                 status_filter: Optional[str] = None):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    data = await report_fee_status(request, current, school_id, class_id, section, class_sections, status_filter)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Fee Status'
+    header = _fee_status_export_columns()
+    ws.append(header)
+    header_font = Font(bold=True, color='FFFFFF')
+    header_fill = PatternFill('solid', fgColor='0B2F4A')
+    for col_idx, _ in enumerate(header, 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal='center')
+    for r in data['rows']:
+        ws.append([
+            r.get('admission_number') or '',
+            r.get('full_name') or '',
+            r.get('class_name') or '',
+            r.get('section') or '',
+            r.get('father_name') or '',
+            r.get('phone') or '',
+            r.get('expected', 0),
+            r.get('discount', 0),
+            r.get('paid', 0),
+            r.get('due', 0),
+            r.get('due_date') or '',
+            (r.get('status') or '').title(),
+        ])
+    # Auto-widen columns roughly
+    widths = [16, 26, 14, 10, 22, 14, 14, 14, 14, 14, 14, 12]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[chr(64 + i)].width = w
+    # Summary sheet
+    s = data['summary']
+    ws2 = wb.create_sheet('Summary')
+    ws2.append(['Metric', 'Value'])
+    for k, v in {
+        'Total Students': data['count'],
+        'Total Expected (Rs.)': s['total_expected'],
+        'Total Paid (Rs.)': s['total_paid'],
+        'Total Due (Rs.)': s['total_due'],
+        'Total Discount (Rs.)': s['total_discount'],
+        'Paid Students': s['paid_count'],
+        'Partial Students': s['partial_count'],
+        'Unpaid Students': s['unpaid_count'],
+    }.items():
+        ws2.append([k, v])
+    for cell in ws2[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+    ws2.column_dimensions['A'].width = 24
+    ws2.column_dimensions['B'].width = 20
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(buf, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                             headers={'Content-Disposition': 'attachment; filename="fee_status_report.xlsx"'})
+
+
+@api.get('/reports/fee-status.csv')
+async def report_fee_status_csv(request: Request, current=Depends(get_current_user),
+                                school_id: Optional[str] = None,
+                                class_id: Optional[str] = None,
+                                section: Optional[str] = None,
+                                class_sections: Optional[str] = None,
+                                status_filter: Optional[str] = None):
+    import csv
+    data = await report_fee_status(request, current, school_id, class_id, section, class_sections, status_filter)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(_fee_status_export_columns())
+    for r in data['rows']:
+        writer.writerow(_fee_status_row_to_list(r))
+    return StreamingResponse(io.BytesIO(buffer.getvalue().encode()),
+                             media_type='text/csv',
+                             headers={'Content-Disposition': 'attachment; filename="fee_status_report.csv"'})
 
 
 # =====================================================

@@ -1,22 +1,26 @@
 [
   {
-    "content": "Explore Analytics.jsx and /api/analytics/fees endpoint",
+    "content": "Backend: update /api/reports/fee-status - remove min_due/max_due, add class_sections multi-filter",
     "status": "completed"
   },
   {
-    "content": "Update backend /api/analytics/fees to include transactions list filtered by date",
+    "content": "Backend: add /api/reports/fee-status.pdf, .xlsx, .csv endpoints",
     "status": "completed"
   },
   {
-    "content": "Update Analytics.jsx to show transaction table with all details",
+    "content": "Frontend: build multi-select class+section popover in Reports.jsx",
     "status": "completed"
   },
   {
-    "content": "Test backend endpoint via curl",
+    "content": "Frontend: remove Min/Max Due inputs, add PDF/XLSX/CSV download buttons for fee-status",
+    "status": "completed"
+  },
+  {
+    "content": "Test backend endpoints via curl",
     "status": "completed"
   },
   {
     "content": "Test frontend via screenshot + testing_agent_v3",
-    "status": "completed"
+    "status": "in_progress"
   }
 ]
