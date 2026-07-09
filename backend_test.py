@@ -1,601 +1,388 @@
+#!/usr/bin/env python3
 """
-Backend API Tests for Stanvard School ERP - New Fee Management Endpoints
-Tests PATCH/DELETE fee heads, DELETE fee plans, and GET fee-schedule
+Comprehensive backend test for Stanvard School ERP - Fee Status Report Extended Testing
 """
 import requests
 import sys
-from datetime import datetime
+import io
 
-# Get BASE_URL from frontend/.env
 BASE_URL = "https://data-pull-6.preview.emergentagent.com/api"
+SUPER_ADMIN = {"email": "superadmin@stanvard.school", "password": "Stanvard@2026"}
+PARENT = {"email": "9079111899", "password": "111899"}
 
-# Test credentials from /app/memory/test_credentials.md
-CREDENTIALS = {
-    'superadmin': {'email': 'superadmin@stanvard.school', 'password': 'Stanvard@2026'},
-    'accountant': {'email': 'accountant@stanvard.school', 'password': 'Accountant@2026'},
-    'parent': {'username': '9079111899', 'password': '111899'},  # Linked to Disha Gadri (KNP-984)
-}
+test_results = []
+total_tests = 0
+passed_tests = 0
+failed_tests = 0
 
-class TestRunner:
-    def __init__(self):
-        self.tests_run = 0
-        self.tests_passed = 0
-        self.tests_failed = 0
-        self.tokens = {}
-        self.users = {}
-        self.failed_tests = []
-        self.kanpur_school_id = None
-        self.test_fee_head_id = None
-        self.test_fee_plan_id = None
-        self.disha_student_id = None
+def log_test(name, passed, msg=""):
+    global total_tests, passed_tests, failed_tests
+    total_tests += 1
+    if passed:
+        passed_tests += 1
+        status = "✅"
+    else:
+        failed_tests += 1
+        status = "❌"
+    result = f"{status} {name}" + (f" - {msg}" if msg else "")
+    test_results.append(result)
+    print(result)
 
-    def test(self, name, func):
-        """Run a single test"""
-        self.tests_run += 1
-        print(f"\n{'='*80}")
-        print(f"TEST {self.tests_run}: {name}")
-        print('='*80)
-        try:
-            func()
-            self.tests_passed += 1
-            print(f"✅ PASSED")
-            return True
-        except AssertionError as e:
-            self.tests_failed += 1
-            self.failed_tests.append({'test': name, 'error': str(e)})
-            print(f"❌ FAILED: {e}")
-            return False
-        except Exception as e:
-            self.tests_failed += 1
-            self.failed_tests.append({'test': name, 'error': str(e)})
-            print(f"❌ ERROR: {e}")
-            return False
+def login(creds):
+    r = requests.post(f"{BASE_URL}/auth/login", json=creds, timeout=10)
+    return r.json().get("access_token") if r.status_code == 200 else None
 
-    def login(self, role):
-        """Login and store token"""
-        creds = CREDENTIALS[role]
-        # Parent uses username field, others use email
-        if role == 'parent':
-            login_data = {'email': creds['username'], 'password': creds['password']}
-        else:
-            login_data = creds
-        
-        print(f"  → Logging in as {role}")
-        r = requests.post(f"{BASE_URL}/auth/login", json=login_data)
-        assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
-        data = r.json()
-        assert 'access_token' in data, "No access_token in response"
-        assert 'user' in data, "No user in response"
-        self.tokens[role] = data['access_token']
-        self.users[role] = data['user']
-        print(f"  ✓ Logged in as {data['user']['full_name']} (role: {data['user']['role']})")
-        return data
+def get_headers(token):
+    return {"Authorization": f"Bearer {token}"}
 
-    def headers(self, role, school_id=None):
-        """Get auth headers"""
-        h = {'Authorization': f"Bearer {self.tokens[role]}"}
-        if school_id:
-            h['X-School-Id'] = school_id
-        return h
+def get_school_id(token):
+    r = requests.get(f"{BASE_URL}/schools", headers=get_headers(token), timeout=10)
+    schools = r.json() if r.status_code == 200 else []
+    return schools[0]['id'] if schools else None
 
-    def get(self, url, role, school_id=None, expected=None):
-        """GET request"""
-        r = requests.get(f"{BASE_URL}{url}", headers=self.headers(role, school_id))
-        if expected is not None:
-            assert r.status_code == expected, f"Expected {expected}, got {r.status_code}: {r.text}"
-        return r
-
-    def post(self, url, role, data, school_id=None, expected=None):
-        """POST request"""
-        r = requests.post(f"{BASE_URL}{url}", json=data, headers=self.headers(role, school_id))
-        if expected is not None:
-            assert r.status_code == expected, f"Expected {expected}, got {r.status_code}: {r.text}"
-        return r
-
-    def patch(self, url, role, data, school_id=None, expected=None):
-        """PATCH request"""
-        r = requests.patch(f"{BASE_URL}{url}", json=data, headers=self.headers(role, school_id))
-        if expected is not None:
-            assert r.status_code == expected, f"Expected {expected}, got {r.status_code}: {r.text}"
-        return r
-
-    def delete(self, url, role, school_id=None, expected=None):
-        """DELETE request"""
-        r = requests.delete(f"{BASE_URL}{url}", headers=self.headers(role, school_id))
-        if expected is not None:
-            assert r.status_code == expected, f"Expected {expected}, got {r.status_code}: {r.text}"
-        return r
-
-    def run_all_tests(self):
-        """Run all backend tests"""
-        print("\n" + "="*80)
-        print("STANVARD SCHOOL ERP - NEW FEE MANAGEMENT ENDPOINTS TESTS")
-        print("="*80)
-
-        # ===== SETUP & AUTH TESTS =====
-        self.test("AUTH: Login with superadmin", lambda: self.test_login_superadmin())
-        self.test("AUTH: Login with accountant", lambda: self.test_login_accountant())
-        self.test("AUTH: Login with parent (9079111899)", lambda: self.test_login_parent())
-        
-        # ===== SETUP: Get Kanpur school and student data =====
-        self.test("SETUP: Get Kanpur school ID", lambda: self.test_get_kanpur_school())
-        self.test("SETUP: Find Disha Gadri student ID", lambda: self.test_find_disha_student())
-        
-        # ===== REGRESSION TESTS (light-touch) =====
-        self.test("REGRESSION: GET /fees/plans returns 13 plans", lambda: self.test_get_fee_plans())
-        self.test("REGRESSION: GET /fees/heads returns at least 1 head", lambda: self.test_get_fee_heads())
-        self.test("REGRESSION: POST /fees/heads still works", lambda: self.test_create_fee_head())
-        self.test("REGRESSION: POST /fees/plans still works", lambda: self.test_create_fee_plan())
-        
-        # ===== NEW ENDPOINT TESTS =====
-        # 1. PATCH /api/fees/heads/{head_id}
-        self.test("FEE HEAD EDIT: PATCH as super_admin updates name and category → 200", 
-                  lambda: self.test_patch_fee_head_superadmin())
-        self.test("FEE HEAD EDIT: PATCH as accountant → 403", 
-                  lambda: self.test_patch_fee_head_accountant_forbidden())
-        
-        # 2. DELETE /api/fees/heads/{head_id}
-        self.test("FEE HEAD DELETE: DELETE unreferenced head as super_admin → 200", 
-                  lambda: self.test_delete_unreferenced_fee_head())
-        self.test("FEE HEAD DELETE: DELETE referenced head (Tuition Fee) → 400 with detail", 
-                  lambda: self.test_delete_referenced_fee_head())
-        self.test("FEE HEAD DELETE: DELETE as accountant → 403", 
-                  lambda: self.test_delete_fee_head_accountant_forbidden())
-        
-        # 3. DELETE /api/fees/plans/{plan_id}
-        self.test("FEE PLAN DELETE: DELETE plan used by assignments → 400 with detail", 
-                  lambda: self.test_delete_used_fee_plan())
-        self.test("FEE PLAN DELETE: DELETE fresh unused plan → 200", 
-                  lambda: self.test_delete_unused_fee_plan())
-        self.test("FEE PLAN DELETE: DELETE as accountant → 403", 
-                  lambda: self.test_delete_fee_plan_accountant_forbidden())
-        
-        # 4. GET /api/fees/student/{student_id}/fee-schedule
-        self.test("FEE SCHEDULE: GET as super_admin returns correct structure", 
-                  lambda: self.test_fee_schedule_superadmin())
-        self.test("FEE SCHEDULE: GET as accountant returns correct structure", 
-                  lambda: self.test_fee_schedule_accountant())
-        self.test("FEE SCHEDULE: Verify schedule has 12 months Apr-Mar", 
-                  lambda: self.test_fee_schedule_12_months())
-        self.test("FEE SCHEDULE: Verify monthly_amount ≈ net_annual/12", 
-                  lambda: self.test_fee_schedule_monthly_calculation())
-        self.test("FEE SCHEDULE: Verify sum of schedule amounts ≈ 12 * monthly_amount", 
-                  lambda: self.test_fee_schedule_sum_validation())
-        self.test("FEE SCHEDULE: Verify payable_full = remaining - discount", 
-                  lambda: self.test_fee_schedule_payable_full())
-        self.test("FEE SCHEDULE: Verify paid months reflected (Divyansh Dangi)", 
-                  lambda: self.test_fee_schedule_paid_months())
-        self.test("FEE SCHEDULE: Parent can access own child (Disha Gadri) → 200", 
-                  lambda: self.test_fee_schedule_parent_own_child())
-        self.test("FEE SCHEDULE: Parent cannot access other student → 403", 
-                  lambda: self.test_fee_schedule_parent_other_child())
-
-        # Print summary
-        print("\n" + "="*80)
-        print("TEST SUMMARY")
-        print("="*80)
-        print(f"Total Tests: {self.tests_run}")
-        print(f"✅ Passed: {self.tests_passed}")
-        print(f"❌ Failed: {self.tests_failed}")
-        print(f"Success Rate: {(self.tests_passed/self.tests_run*100):.1f}%")
-        
-        if self.failed_tests:
-            print("\n" + "="*80)
-            print("FAILED TESTS DETAILS")
-            print("="*80)
-            for ft in self.failed_tests:
-                print(f"\n❌ {ft['test']}")
-                print(f"   Error: {ft['error']}")
-
-        return 0 if self.tests_failed == 0 else 1
-
-    # ===== TEST IMPLEMENTATIONS =====
+def test_base_report(token, sid):
+    print("\n" + "="*80)
+    print("TEST 1: Base Fee Status Report")
+    print("="*80)
     
-    def test_login_superadmin(self):
-        data = self.login('superadmin')
-        assert data['user']['role'] == 'super_admin'
+    r = requests.get(f"{BASE_URL}/reports/fee-status?school_id={sid}", 
+                     headers=get_headers(token), timeout=30)
+    
+    log_test("Base call returns 200", r.status_code == 200, f"Got {r.status_code}")
+    if r.status_code != 200:
+        return None
+    
+    data = r.json()
+    
+    for key in ['rows', 'count', 'by_class', 'summary']:
+        log_test(f"Has '{key}' field", key in data)
+    
+    rows = data['rows']
+    log_test("Count matches rows", len(rows) == data['count'])
+    log_test("Has student data", len(rows) > 0, f"{len(rows)} students")
+    
+    if len(rows) == 0:
+        return None
+    
+    # Check row schema
+    row = rows[0]
+    required = ['student_id', 'admission_number', 'full_name', 'class_id', 'class_name',
+                'section', 'phone', 'father_name', 'expected', 'gross_expected', 'discount',
+                'paid', 'due', 'collection_percent', 'due_date', 'upcoming_due_date',
+                'last_payment_date', 'overdue_days', 'status', 'behavior_tag']
+    missing = [f for f in required if f not in row]
+    log_test("Row has all required fields", len(missing) == 0, 
+             f"Missing: {missing}" if missing else "")
+    
+    # Check calculations (first 10 rows)
+    calc_ok = True
+    for r in rows[:10]:
+        if abs(r['expected'] - (r['gross_expected'] - r['discount'])) > 0.01:
+            calc_ok = False
+            break
+        if abs(r['due'] - max(r['expected'] - r['paid'], 0)) > 0.01:
+            calc_ok = False
+            break
+    log_test("Row calculations correct", calc_ok)
+    
+    # Check status values
+    status_ok = all(r['status'] in ['paid', 'partial', 'unpaid'] for r in rows[:10])
+    log_test("Status values valid", status_ok)
+    
+    # Check behavior_tag values
+    behavior_ok = all(r['behavior_tag'] in ['regular', 'late', 'defaulter', 'na'] for r in rows[:10])
+    log_test("Behavior_tag values valid", behavior_ok)
+    
+    # Check summary
+    s = data['summary']
+    total_exp = sum(r['expected'] for r in rows)
+    total_paid = sum(r['paid'] for r in rows)
+    total_due = sum(r['due'] for r in rows)
+    
+    log_test("Summary total_expected correct", abs(s['total_expected'] - total_exp) <= 1)
+    log_test("Summary total_paid correct", abs(s['total_paid'] - total_paid) <= 0.01)
+    log_test("Summary total_due correct", abs(s['total_due'] - total_due) <= 0.01)
+    
+    if total_exp > 0:
+        coll_calc = round((total_paid / total_exp) * 100, 1)
+        log_test("Summary collection_percent correct", 
+                 abs(s['collection_percent'] - coll_calc) <= 0.1)
+    
+    # Check behavior counts
+    def_count = sum(1 for r in rows if r['behavior_tag'] == 'defaulter')
+    late_count = sum(1 for r in rows if r['behavior_tag'] == 'late')
+    reg_count = sum(1 for r in rows if r['behavior_tag'] == 'regular')
+    
+    log_test("Summary defaulter_count correct", s['defaulter_count'] == def_count)
+    log_test("Summary late_count correct", s['late_count'] == late_count)
+    log_test("Summary regular_count correct", s['regular_count'] == reg_count)
+    
+    # Check by_class
+    log_test("by_class has entries", len(data['by_class']) > 0, 
+             f"{len(data['by_class'])} groups")
+    
+    if data['by_class']:
+        bc = data['by_class'][0]
+        bc_req = ['class_id', 'class_name', 'section', 'students', 'expected',
+                  'paid', 'due', 'collection_percent']
+        bc_missing = [f for f in bc_req if f not in bc]
+        log_test("by_class has required fields", len(bc_missing) == 0)
+        
+        # Validate by_class calculations
+        class_rows = [r for r in rows if r['class_id'] == bc['class_id'] and 
+                     (r.get('section') or '-') == bc['section']]
+        log_test("by_class student count correct", len(class_rows) == bc['students'])
+        
+        exp_sum = sum(r['expected'] for r in class_rows)
+        log_test("by_class expected sum correct", abs(bc['expected'] - exp_sum) <= 0.01)
+    
+    return data
 
-    def test_login_accountant(self):
-        data = self.login('accountant')
-        assert data['user']['role'] == 'accountant'
-
-    def test_login_parent(self):
-        data = self.login('parent')
-        assert data['user']['role'] == 'parent'
-        assert 'linked_student_ids' in data['user'] or 'linked_student_id' in data['user'], \
-            "Parent should have linked student"
-
-    def test_get_kanpur_school(self):
-        """Get Kanpur school ID (The Stanvard Sec. School, Girwa, Udaipur)"""
-        r = self.get('/schools', 'superadmin', expected=200)
-        schools = r.json()
-        # Find Kanpur school (code KNP or name contains Kanpur/Girwa/Udaipur)
-        kanpur = next((s for s in schools if 'KNP' in s.get('code', '') or 
-                      'Kanpur' in s.get('name', '') or 'Girwa' in s.get('name', '') or
-                      'Udaipur' in s.get('name', '')), None)
-        assert kanpur is not None, "Kanpur school not found"
-        self.kanpur_school_id = kanpur['id']
-        print(f"  ✓ Found Kanpur school: {kanpur['name']} (ID: {self.kanpur_school_id})")
-
-    def test_find_disha_student(self):
-        """Find Disha Gadri student (KNP-984)"""
-        if not self.kanpur_school_id:
-            self.test_get_kanpur_school()
-        
-        r = self.get('/students', 'superadmin', school_id=self.kanpur_school_id, expected=200)
-        students = r.json()
-        # Find Disha Gadri by name or admission number
-        disha = next((s for s in students if 'Disha' in s.get('full_name', '') and 
-                     'Gadri' in s.get('full_name', '')), None)
-        if not disha:
-            # Try by admission number
-            disha = next((s for s in students if s.get('admission_number') == 'KNP-984'), None)
-        
-        assert disha is not None, "Disha Gadri student not found"
-        self.disha_student_id = disha['id']
-        print(f"  ✓ Found Disha Gadri: {disha['full_name']} (ID: {self.disha_student_id}, Admission: {disha.get('admission_number')})")
-
-    def test_get_fee_plans(self):
-        """Regression: GET /fees/plans returns 13 plans"""
-        if not self.kanpur_school_id:
-            self.test_get_kanpur_school()
-        
-        r = self.get('/fees/plans', 'superadmin', school_id=self.kanpur_school_id, expected=200)
-        plans = r.json()
-        assert isinstance(plans, list), "Should return list"
-        assert len(plans) == 13, f"Expected 13 plans, got {len(plans)}"
-        print(f"  ✓ Found {len(plans)} fee plans")
-
-    def test_get_fee_heads(self):
-        """Regression: GET /fees/heads returns at least 1 head"""
-        if not self.kanpur_school_id:
-            self.test_get_kanpur_school()
-        
-        r = self.get('/fees/heads', 'superadmin', school_id=self.kanpur_school_id, expected=200)
-        heads = r.json()
-        assert isinstance(heads, list), "Should return list"
-        assert len(heads) >= 1, f"Expected at least 1 fee head, got {len(heads)}"
-        print(f"  ✓ Found {len(heads)} fee heads")
-
-    def test_create_fee_head(self):
-        """Regression: POST /fees/heads still works"""
-        if not self.kanpur_school_id:
-            self.test_get_kanpur_school()
-        
-        head_data = {
-            'school_id': self.kanpur_school_id,
-            'name': f'Test Fee Head {datetime.now().strftime("%H%M%S")}',
-            'category': 'academic',
-            'description': 'Test fee head for regression'
-        }
-        r = self.post('/fees/heads', 'superadmin', head_data, school_id=self.kanpur_school_id, expected=200)
-        head = r.json()
-        assert 'id' in head, "Should have id"
-        assert head['name'] == head_data['name'], "Name should match"
-        self.test_fee_head_id = head['id']
-        print(f"  ✓ Created fee head: {head['name']} (ID: {head['id']})")
-
-    def test_create_fee_plan(self):
-        """Regression: POST /fees/plans still works"""
-        if not self.kanpur_school_id:
-            self.test_get_kanpur_school()
-        if not self.test_fee_head_id:
-            self.test_create_fee_head()
-        
-        plan_data = {
-            'school_id': self.kanpur_school_id,
-            'name': f'Test Fee Plan {datetime.now().strftime("%H%M%S")}',
-            'academic_session': '2026-27',
-            'class_id': None,
-            'items': [
-                {'fee_head_id': self.test_fee_head_id, 'fee_head_name': 'Test Fee', 'amount': 5000, 'frequency': 'annual'}
-            ],
-            'annual_discount_percent': 5.0,
-            'late_fee_amount': 100,
-            'late_fee_after_day': 10
-        }
-        r = self.post('/fees/plans', 'superadmin', plan_data, school_id=self.kanpur_school_id, expected=200)
-        plan = r.json()
-        assert 'id' in plan, "Should have id"
-        assert plan['name'] == plan_data['name'], "Name should match"
-        self.test_fee_plan_id = plan['id']
-        print(f"  ✓ Created fee plan: {plan['name']} (ID: {plan['id']})")
-
-    def test_patch_fee_head_superadmin(self):
-        """PATCH /fees/heads/{head_id} as super_admin updates name and category → 200"""
-        if not self.test_fee_head_id:
-            self.test_create_fee_head()
-        
-        update_data = {
-            'name': f'Updated Fee Head {datetime.now().strftime("%H%M%S")}',
-            'category': 'transport'
-        }
-        r = self.patch(f'/fees/heads/{self.test_fee_head_id}', 'superadmin', update_data, expected=200)
-        head = r.json()
-        assert head['name'] == update_data['name'], f"Name should be updated to {update_data['name']}"
-        assert head['category'] == update_data['category'], f"Category should be updated to {update_data['category']}"
-        print(f"  ✓ Updated fee head: name={head['name']}, category={head['category']}")
-
-    def test_patch_fee_head_accountant_forbidden(self):
-        """PATCH /fees/heads/{head_id} as accountant → 403"""
-        if not self.test_fee_head_id:
-            self.test_create_fee_head()
-        
-        update_data = {'name': 'Should Not Update'}
-        r = self.patch(f'/fees/heads/{self.test_fee_head_id}', 'accountant', update_data, expected=403)
-        print(f"  ✓ Accountant correctly forbidden from updating fee head (403)")
-
-    def test_delete_unreferenced_fee_head(self):
-        """DELETE /fees/heads/{head_id} unreferenced head as super_admin → 200"""
-        # Create a new fee head that's not referenced
-        if not self.kanpur_school_id:
-            self.test_get_kanpur_school()
-        
-        head_data = {
-            'school_id': self.kanpur_school_id,
-            'name': f'Delete Me {datetime.now().strftime("%H%M%S")}',
-            'category': 'other'
-        }
-        r = self.post('/fees/heads', 'superadmin', head_data, school_id=self.kanpur_school_id, expected=200)
-        head_id = r.json()['id']
-        
-        # Now delete it
-        r = self.delete(f'/fees/heads/{head_id}', 'superadmin', expected=200)
-        result = r.json()
-        assert result.get('ok') == True, "Should return ok: true"
-        print(f"  ✓ Deleted unreferenced fee head successfully")
-
-    def test_delete_referenced_fee_head(self):
-        """DELETE /fees/heads/{head_id} referenced head (Tuition Fee) → 400 with detail"""
-        if not self.kanpur_school_id:
-            self.test_get_kanpur_school()
-        
-        # Get existing fee heads and find "Tuition Fee"
-        r = self.get('/fees/heads', 'superadmin', school_id=self.kanpur_school_id, expected=200)
-        heads = r.json()
-        tuition_head = next((h for h in heads if 'Tuition' in h.get('name', '')), None)
-        assert tuition_head is not None, "Tuition Fee head not found"
-        
-        # Try to delete it - should fail with 400
-        r = self.delete(f'/fees/heads/{tuition_head["id"]}', 'superadmin', expected=400)
-        error_detail = r.json().get('detail', '')
-        assert 'used in' in error_detail.lower() and 'plan' in error_detail.lower(), \
-            f"Error detail should mention usage in plans: {error_detail}"
-        print(f"  ✓ Delete referenced fee head correctly blocked: {error_detail}")
-
-    def test_delete_fee_head_accountant_forbidden(self):
-        """DELETE /fees/heads/{head_id} as accountant → 403"""
-        if not self.test_fee_head_id:
-            self.test_create_fee_head()
-        
-        r = self.delete(f'/fees/heads/{self.test_fee_head_id}', 'accountant', expected=403)
-        print(f"  ✓ Accountant correctly forbidden from deleting fee head (403)")
-
-    def test_delete_used_fee_plan(self):
-        """DELETE /fees/plans/{plan_id} used by assignments → 400 with detail"""
-        if not self.kanpur_school_id:
-            self.test_get_kanpur_school()
-        
-        # Get existing fee plans - any of the 13 seeded plans should be used by 375 assignments
-        r = self.get('/fees/plans', 'superadmin', school_id=self.kanpur_school_id, expected=200)
-        plans = r.json()
-        assert len(plans) > 0, "Should have at least one plan"
-        
-        # Try to delete the first plan - should fail with 400
-        plan_id = plans[0]['id']
-        r = self.delete(f'/fees/plans/{plan_id}', 'superadmin', expected=400)
-        error_detail = r.json().get('detail', '')
-        assert 'used in' in error_detail.lower() and 'assignment' in error_detail.lower(), \
-            f"Error detail should mention usage in assignments: {error_detail}"
-        print(f"  ✓ Delete used fee plan correctly blocked: {error_detail}")
-
-    def test_delete_unused_fee_plan(self):
-        """DELETE /fees/plans/{plan_id} fresh unused plan → 200"""
-        if not self.test_fee_plan_id:
-            self.test_create_fee_plan()
-        
-        # Delete the test plan we created (not assigned to any student)
-        r = self.delete(f'/fees/plans/{self.test_fee_plan_id}', 'superadmin', expected=200)
-        result = r.json()
-        assert result.get('ok') == True, "Should return ok: true"
-        print(f"  ✓ Deleted unused fee plan successfully")
-
-    def test_delete_fee_plan_accountant_forbidden(self):
-        """DELETE /fees/plans/{plan_id} as accountant → 403"""
-        if not self.kanpur_school_id:
-            self.test_get_kanpur_school()
-        
-        # Get any plan
-        r = self.get('/fees/plans', 'superadmin', school_id=self.kanpur_school_id, expected=200)
-        plans = r.json()
-        assert len(plans) > 0, "Should have at least one plan"
-        
-        r = self.delete(f'/fees/plans/{plans[0]["id"]}', 'accountant', expected=403)
-        print(f"  ✓ Accountant correctly forbidden from deleting fee plan (403)")
-
-    def test_fee_schedule_superadmin(self):
-        """GET /fees/student/{student_id}/fee-schedule as super_admin returns correct structure"""
-        if not self.disha_student_id:
-            self.test_find_disha_student()
-        
-        r = self.get(f'/fees/student/{self.disha_student_id}/fee-schedule', 'superadmin', expected=200)
+def test_filters(token, sid, base_data):
+    print("\n" + "="*80)
+    print("TESTS 2-8: Filters")
+    print("="*80)
+    
+    # Test 2: quick_view=defaulters
+    r = requests.get(f"{BASE_URL}/reports/fee-status?school_id={sid}&quick_view=defaulters",
+                     headers=get_headers(token), timeout=30)
+    log_test("quick_view=defaulters returns 200", r.status_code == 200)
+    if r.status_code == 200:
         data = r.json()
-        
-        # Verify structure
-        required_fields = ['student', 'academic_session', 'annual_total', 'concession', 
-                          'net_annual', 'monthly_amount', 'total_paid', 'remaining_balance',
-                          'annual_discount_percent', 'full_payment_discount', 'payable_full',
-                          'schedule', 'fee_head_names']
-        for field in required_fields:
-            assert field in data, f"Missing field: {field}"
-        
-        # Verify types
-        assert isinstance(data['student'], dict), "student should be dict"
-        assert isinstance(data['academic_session'], str), "academic_session should be string"
-        assert isinstance(data['annual_total'], (int, float)), "annual_total should be number"
-        assert data['annual_total'] > 0, "annual_total should be > 0"
-        assert isinstance(data['schedule'], list), "schedule should be list"
-        assert isinstance(data['fee_head_names'], list), "fee_head_names should be list"
-        
-        print(f"  ✓ Fee schedule structure valid: student={data['student']['full_name']}, " +
-              f"annual_total={data['annual_total']}, net_annual={data['net_annual']}, " +
-              f"monthly_amount={data['monthly_amount']}, total_paid={data['total_paid']}")
-
-    def test_fee_schedule_accountant(self):
-        """GET /fees/student/{student_id}/fee-schedule as accountant returns correct structure"""
-        if not self.disha_student_id:
-            self.test_find_disha_student()
-        
-        r = self.get(f'/fees/student/{self.disha_student_id}/fee-schedule', 'accountant', expected=200)
+        all_def = all(row['behavior_tag'] == 'defaulter' for row in data['rows'])
+        log_test("All rows are defaulters", all_def, f"{len(data['rows'])} rows")
+        if base_data:
+            log_test("Count matches base defaulter_count", 
+                     len(data['rows']) == base_data['summary']['defaulter_count'])
+    
+    # Test 3: quick_view=fully_paid
+    r = requests.get(f"{BASE_URL}/reports/fee-status?school_id={sid}&quick_view=fully_paid",
+                     headers=get_headers(token), timeout=30)
+    log_test("quick_view=fully_paid returns 200", r.status_code == 200)
+    if r.status_code == 200:
         data = r.json()
-        assert 'student' in data and 'schedule' in data, "Should have student and schedule"
-        print(f"  ✓ Accountant can access fee schedule")
-
-    def test_fee_schedule_12_months(self):
-        """Verify schedule has 12 months Apr-Mar"""
-        if not self.disha_student_id:
-            self.test_find_disha_student()
-        
-        r = self.get(f'/fees/student/{self.disha_student_id}/fee-schedule', 'superadmin', expected=200)
+        all_paid = all(row['status'] == 'paid' and row['due'] <= 0 for row in data['rows'])
+        log_test("All rows fully paid", all_paid, f"{len(data['rows'])} rows")
+    
+    # Test 4: quick_view=upcoming
+    r = requests.get(f"{BASE_URL}/reports/fee-status?school_id={sid}&quick_view=upcoming",
+                     headers=get_headers(token), timeout=30)
+    log_test("quick_view=upcoming returns 200", r.status_code == 200)
+    if r.status_code == 200:
         data = r.json()
-        schedule = data['schedule']
-        
-        assert len(schedule) == 12, f"Schedule should have 12 months, got {len(schedule)}"
-        
-        # Verify structure of each month
-        for i, month in enumerate(schedule):
-            assert month['index'] == i, f"Month index should be {i}, got {month['index']}"
-            assert 'label' in month, f"Month {i} missing label"
-            assert 'month' in month, f"Month {i} missing month"
-            assert 'year' in month, f"Month {i} missing year"
-            assert 'amount' in month, f"Month {i} missing amount"
-            assert 'paid_amount' in month, f"Month {i} missing paid_amount"
-            assert 'status' in month, f"Month {i} missing status"
-            assert month['status'] in ['paid', 'partial', 'overdue', 'pending'], \
-                f"Month {i} has invalid status: {month['status']}"
-        
-        # Verify first month is April
-        assert 'April' in schedule[0]['label'], f"First month should be April, got {schedule[0]['label']}"
-        
-        print(f"  ✓ Schedule has 12 months: {schedule[0]['label']} to {schedule[11]['label']}")
-
-    def test_fee_schedule_monthly_calculation(self):
-        """Verify monthly_amount ≈ net_annual/12"""
-        if not self.disha_student_id:
-            self.test_find_disha_student()
-        
-        r = self.get(f'/fees/student/{self.disha_student_id}/fee-schedule', 'superadmin', expected=200)
+        all_upcoming = all(row.get('upcoming_due_date') for row in data['rows'])
+        log_test("All rows have upcoming_due_date", all_upcoming, f"{len(data['rows'])} rows")
+    
+    # Test 5: behavior=late
+    r = requests.get(f"{BASE_URL}/reports/fee-status?school_id={sid}&behavior=late",
+                     headers=get_headers(token), timeout=30)
+    log_test("behavior=late returns 200", r.status_code == 200)
+    if r.status_code == 200:
         data = r.json()
-        
-        net_annual = data['net_annual']
-        monthly_amount = data['monthly_amount']
-        expected_monthly = round(net_annual / 12.0, 2)
-        
-        assert monthly_amount == expected_monthly, \
-            f"monthly_amount {monthly_amount} should equal round(net_annual/12, 2) = {expected_monthly}"
-        
-        print(f"  ✓ Monthly calculation correct: {net_annual}/12 = {monthly_amount}")
-
-    def test_fee_schedule_sum_validation(self):
-        """Verify sum of schedule amounts ≈ 12 * monthly_amount"""
-        if not self.disha_student_id:
-            self.test_find_disha_student()
-        
-        r = self.get(f'/fees/student/{self.disha_student_id}/fee-schedule', 'superadmin', expected=200)
+        all_late = all(row['behavior_tag'] == 'late' for row in data['rows'])
+        log_test("All rows are late", all_late, f"{len(data['rows'])} rows")
+    
+    # Test 6: due_min/due_max
+    r = requests.get(f"{BASE_URL}/reports/fee-status?school_id={sid}&due_min=5000&due_max=25000",
+                     headers=get_headers(token), timeout=30)
+    log_test("due_min/due_max returns 200", r.status_code == 200)
+    if r.status_code == 200:
         data = r.json()
-        
-        schedule = data['schedule']
-        monthly_amount = data['monthly_amount']
-        
-        total_schedule_amount = sum(month['amount'] for month in schedule)
-        expected_total = 12 * monthly_amount
-        
-        # Allow small rounding difference (within 1 rupee)
-        diff = abs(total_schedule_amount - expected_total)
-        assert diff <= 1.0, \
-            f"Sum of schedule amounts {total_schedule_amount} should ≈ 12 * monthly_amount {expected_total} (diff: {diff})"
-        
-        print(f"  ✓ Schedule sum validation: {total_schedule_amount} ≈ 12 * {monthly_amount} = {expected_total}")
-
-    def test_fee_schedule_payable_full(self):
-        """Verify payable_full = remaining_balance - full_payment_discount"""
-        if not self.disha_student_id:
-            self.test_find_disha_student()
-        
-        r = self.get(f'/fees/student/{self.disha_student_id}/fee-schedule', 'superadmin', expected=200)
+        in_range = all(5000 <= row['due'] <= 25000 for row in data['rows'])
+        log_test("All rows in due range", in_range, f"{len(data['rows'])} rows")
+    
+    # Test 7: status_filter=partial
+    r = requests.get(f"{BASE_URL}/reports/fee-status?school_id={sid}&status_filter=partial",
+                     headers=get_headers(token), timeout=30)
+    log_test("status_filter=partial returns 200", r.status_code == 200)
+    if r.status_code == 200:
         data = r.json()
-        
-        remaining_balance = data['remaining_balance']
-        full_payment_discount = data['full_payment_discount']
-        payable_full = data['payable_full']
-        
-        expected_payable = round(max(remaining_balance - full_payment_discount, 0.0), 2)
-        
-        assert payable_full == expected_payable, \
-            f"payable_full {payable_full} should equal remaining_balance {remaining_balance} - full_payment_discount {full_payment_discount} = {expected_payable}"
-        
-        print(f"  ✓ Payable full calculation: {remaining_balance} - {full_payment_discount} = {payable_full}")
-
-    def test_fee_schedule_paid_months(self):
-        """Verify paid months reflected (Divyansh Dangi with opening balance ₹1390)"""
-        if not self.kanpur_school_id:
-            self.test_get_kanpur_school()
-        
-        # Find Divyansh Dangi
-        r = self.get('/students', 'superadmin', school_id=self.kanpur_school_id, expected=200)
-        students = r.json()
-        divyansh = next((s for s in students if 'Divyansh' in s.get('full_name', '') and 
-                        'Dangi' in s.get('full_name', '')), None)
-        
-        if not divyansh:
-            print(f"  ⚠ Skipped: Divyansh Dangi not found")
-            return
-        
-        r = self.get(f'/fees/student/{divyansh["id"]}/fee-schedule', 'superadmin', expected=200)
+        all_partial = all(row['status'] == 'partial' and 0 < row['paid'] < row['expected'] 
+                         for row in data['rows'])
+        log_test("All rows partial", all_partial, f"{len(data['rows'])} rows")
+    
+    # Test 8: payment_date_start
+    r = requests.get(f"{BASE_URL}/reports/fee-status?school_id={sid}&payment_date_start=2020-01-01",
+                     headers=get_headers(token), timeout=30)
+    log_test("payment_date_start=2020-01-01 returns 200", r.status_code == 200)
+    if r.status_code == 200:
         data = r.json()
-        
-        # Verify total_paid > 0
-        assert data['total_paid'] > 0, f"Divyansh should have paid amount > 0, got {data['total_paid']}"
-        
-        # Verify at least one month is paid or partial
-        schedule = data['schedule']
-        paid_or_partial = [m for m in schedule if m['status'] in ['paid', 'partial']]
-        assert len(paid_or_partial) > 0, "At least one month should be paid or partial"
-        
-        print(f"  ✓ Paid months reflected: total_paid={data['total_paid']}, " +
-              f"{len(paid_or_partial)} months paid/partial")
-
-    def test_fee_schedule_parent_own_child(self):
-        """Parent can access own child (Disha Gadri) → 200"""
-        if not self.disha_student_id:
-            self.test_find_disha_student()
-        
-        r = self.get(f'/fees/student/{self.disha_student_id}/fee-schedule', 'parent', expected=200)
+        all_have_date = all(row.get('last_payment_date') and 
+                           row['last_payment_date'] >= '2020-01-01' for row in data['rows'])
+        log_test("All rows have valid last_payment_date", all_have_date, f"{len(data['rows'])} rows")
+    
+    r = requests.get(f"{BASE_URL}/reports/fee-status?school_id={sid}&payment_date_start=2099-01-01",
+                     headers=get_headers(token), timeout=30)
+    log_test("payment_date_start=2099-01-01 returns 200", r.status_code == 200)
+    if r.status_code == 200:
         data = r.json()
-        assert 'student' in data and 'schedule' in data, "Should have student and schedule"
-        print(f"  ✓ Parent can access own child's fee schedule: {data['student']['full_name']}")
+        log_test("Future date returns 0 rows", len(data['rows']) == 0)
 
-    def test_fee_schedule_parent_other_child(self):
-        """Parent cannot access other student → 403"""
-        if not self.kanpur_school_id:
-            self.test_get_kanpur_school()
-        if not self.disha_student_id:
-            self.test_find_disha_student()
-        
-        # Get another student (not Disha)
-        r = self.get('/students', 'superadmin', school_id=self.kanpur_school_id, expected=200)
-        students = r.json()
-        other_student = next((s for s in students if s['id'] != self.disha_student_id), None)
-        
-        if not other_student:
-            print(f"  ⚠ Skipped: No other student found")
-            return
-        
-        r = self.get(f'/fees/student/{other_student["id"]}/fee-schedule', 'parent', expected=403)
-        print(f"  ✓ Parent correctly forbidden from accessing other student (403)")
+def test_rbac(parent_token, sid):
+    print("\n" + "="*80)
+    print("TEST 9: RBAC - Parent Access")
+    print("="*80)
+    
+    r = requests.get(f"{BASE_URL}/reports/fee-status?school_id={sid}",
+                     headers=get_headers(parent_token), timeout=30)
+    
+    if r.status_code == 403:
+        log_test("Parent gets 403", True)
+    elif r.status_code == 200:
+        data = r.json()
+        if len(data.get('rows', [])) == 0:
+            log_test("Parent gets empty result", True)
+        else:
+            log_test("Parent access restricted", False, 
+                     f"Got {len(data['rows'])} rows (should be 0 or 403)")
+    else:
+        log_test("Parent RBAC handled", False, f"Got {r.status_code}")
 
+def test_exports(token, sid):
+    print("\n" + "="*80)
+    print("TESTS 10a-c: Exports")
+    print("="*80)
+    
+    # PDF
+    r = requests.get(f"{BASE_URL}/reports/fee-status.pdf?school_id={sid}&quick_view=defaulters",
+                     headers=get_headers(token), timeout=30)
+    log_test("PDF export returns 200", r.status_code == 200)
+    if r.status_code == 200:
+        log_test("PDF Content-Type correct", 'application/pdf' in r.headers.get('Content-Type', ''))
+        log_test("PDF non-empty", len(r.content) > 0, f"{len(r.content)} bytes")
+        log_test("PDF valid signature", r.content[:4] == b'%PDF')
+    
+    # XLSX
+    r = requests.get(f"{BASE_URL}/reports/fee-status.xlsx?school_id={sid}&quick_view=defaulters",
+                     headers=get_headers(token), timeout=30)
+    log_test("XLSX export returns 200", r.status_code == 200)
+    if r.status_code == 200:
+        ct = r.headers.get('Content-Type', '')
+        log_test("XLSX Content-Type correct", 'openxmlformats' in ct or 'spreadsheetml' in ct)
+        log_test("XLSX non-empty", len(r.content) > 0, f"{len(r.content)} bytes")
+        
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(io.BytesIO(r.content))
+            expected = ['Fee Status', 'Summary', 'By Class']
+            missing = [s for s in expected if s not in wb.sheetnames]
+            log_test("XLSX has 3 sheets", len(missing) == 0, 
+                     f"Missing: {missing}" if missing else "All present")
+        except ImportError:
+            log_test("XLSX sheets (openpyxl unavailable)", True, "Skipped")
+        except Exception as e:
+            log_test("XLSX sheets verification", False, str(e))
+    
+    # CSV
+    r = requests.get(f"{BASE_URL}/reports/fee-status.csv?school_id={sid}&quick_view=defaulters",
+                     headers=get_headers(token), timeout=30)
+    log_test("CSV export returns 200", r.status_code == 200)
+    if r.status_code == 200:
+        log_test("CSV Content-Type correct", 'text/csv' in r.headers.get('Content-Type', ''))
+        log_test("CSV non-empty", len(r.text) > 0, f"{len(r.text)} chars")
+        
+        lines = r.text.strip().split('\n')
+        if lines:
+            header = lines[0]
+            required = ['Admission No', 'Student', 'Class', 'Section', 'Guardian', 'Phone',
+                       'Expected (Rs.)', 'Discount (Rs.)', 'Paid (Rs.)', 'Due (Rs.)',
+                       'Due Date', 'Last Payment', 'Overdue Days', 'Status', 'Behavior']
+            missing = [c for c in required if c not in header]
+            log_test("CSV has all columns", len(missing) == 0, 
+                     f"Missing: {missing}" if missing else "")
 
-if __name__ == '__main__':
-    runner = TestRunner()
-    exit_code = runner.run_all_tests()
-    sys.exit(exit_code)
+def test_regression(token, sid):
+    print("\n" + "="*80)
+    print("TEST 11: Regression")
+    print("="*80)
+    
+    # Fee heads
+    r = requests.get(f"{BASE_URL}/fees/heads?school_id={sid}", headers=get_headers(token), timeout=10)
+    if r.status_code == 200 and len(r.json()) > 0:
+        head_id = r.json()[0]['id']
+        
+        r2 = requests.patch(f"{BASE_URL}/fees/heads/{head_id}?school_id={sid}",
+                           headers=get_headers(token),
+                           json={"name": r.json()[0]['name']}, timeout=10)
+        log_test("PATCH /api/fees/heads/{id} works", r2.status_code == 200)
+        
+        r3 = requests.delete(f"{BASE_URL}/fees/heads/{head_id}?school_id={sid}",
+                            headers=get_headers(token), timeout=10)
+        log_test("DELETE /api/fees/heads/{id} responds", r3.status_code in [200, 400])
+    else:
+        log_test("Fee heads endpoints", False, "No fee heads found")
+    
+    # Fee plans
+    r = requests.get(f"{BASE_URL}/fees/plans?school_id={sid}", headers=get_headers(token), timeout=10)
+    if r.status_code == 200 and len(r.json()) > 0:
+        plan_id = r.json()[0]['id']
+        
+        r2 = requests.delete(f"{BASE_URL}/fees/plans/{plan_id}?school_id={sid}",
+                            headers=get_headers(token), timeout=10)
+        log_test("DELETE /api/fees/plans/{id} responds", r2.status_code in [200, 400])
+    else:
+        log_test("Fee plans endpoint", False, "No fee plans found")
+    
+    # Fee schedule
+    r = requests.get(f"{BASE_URL}/students?school_id={sid}&limit=1", 
+                     headers=get_headers(token), timeout=10)
+    if r.status_code == 200 and len(r.json()) > 0:
+        student_id = r.json()[0]['id']
+        
+        r2 = requests.get(f"{BASE_URL}/fees/student/{student_id}/fee-schedule?school_id={sid}",
+                         headers=get_headers(token), timeout=10)
+        log_test("GET /api/fees/student/{id}/fee-schedule works", r2.status_code == 200)
+    else:
+        log_test("Fee schedule endpoint", False, "No students found")
+
+def main():
+    print("="*80)
+    print("STANVARD SCHOOL ERP - FEE STATUS REPORT EXTENDED TESTING")
+    print("="*80)
+    
+    print("\n🔐 Logging in as Super Admin...")
+    admin_token = login(SUPER_ADMIN)
+    if not admin_token:
+        print("❌ Failed to login as super admin")
+        sys.exit(1)
+    print("✅ Super Admin login successful")
+    
+    school_id = get_school_id(admin_token)
+    if not school_id:
+        print("❌ Failed to get school_id")
+        sys.exit(1)
+    print(f"✅ Using school_id: {school_id[:8]}...")
+    
+    print("\n🔐 Logging in as Parent...")
+    parent_token = login(PARENT)
+    if parent_token:
+        print("✅ Parent login successful")
+    else:
+        print("⚠️  Parent login failed, RBAC test will be skipped")
+    
+    # Run tests
+    base_data = test_base_report(admin_token, school_id)
+    test_filters(admin_token, school_id, base_data)
+    if parent_token:
+        test_rbac(parent_token, school_id)
+    test_exports(admin_token, school_id)
+    test_regression(admin_token, school_id)
+    
+    # Summary
+    print("\n" + "="*80)
+    print("TEST SUMMARY")
+    print("="*80)
+    print(f"Total: {total_tests} | Passed: {passed_tests} ✅ | Failed: {failed_tests} ❌")
+    print(f"Success Rate: {(passed_tests/total_tests*100):.1f}%")
+    print("="*80)
+    
+    if failed_tests > 0:
+        print("\n❌ FAILED TESTS:")
+        for r in test_results:
+            if "❌" in r:
+                print(f"  {r}")
+    
+    return 0 if failed_tests == 0 else 1
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -109,6 +109,58 @@ user_problem_statement: |
   2. Add monthly fee integration on Parent Dashboard: show two options — Pay Monthly and Pay Fully.
 
 backend:
+  - task: "Fee status report — extended fields & filters"
+    implemented: true
+    working: false
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Extended GET /api/reports/fee-status with new query params:
+              due_min, due_max, payment_date_start, payment_date_end,
+              quick_view (defaulters|fully_paid|upcoming), behavior (regular|late|defaulter).
+            Per-row additions: last_payment_date, overdue_days, upcoming_due_date,
+              behavior_tag ('regular'|'late'|'defaulter'|'na'), collection_percent,
+              gross_expected. row.expected is now NET of discount.
+            Also `by_class` rollup and expanded `summary` (collection_percent, defaulter_count, ...).
+            Export endpoints (.pdf/.xlsx/.csv) accept the same filters and include Last Payment,
+            Overdue Days, Behavior columns; XLSX adds a "By Class" sheet.
+        - working: false
+          agent: "testing"
+          comment: |
+            Comprehensive testing completed (56 tests, 55 passed, 1 failed - 98.2% success rate).
+            
+            ✅ PASSED (55/56):
+            - Base endpoint schema validation: All required fields present (student_id, admission_number, full_name, class_id, class_name, section, phone, father_name, expected, gross_expected, discount, paid, due, collection_percent, due_date, upcoming_due_date, last_payment_date, overdue_days, status, behavior_tag)
+            - Calculation accuracy: expected = gross_expected - discount ✓, due = max(expected - paid, 0) ✓
+            - Status values: All rows have valid status (paid|partial|unpaid) consistent with paid/due amounts
+            - Behavior tags: All rows have valid behavior_tag (regular|late|defaulter|na)
+            - Summary calculations: total_expected, total_paid, total_due, collection_percent all match row sums
+            - Behavior counts: defaulter_count (353), late_count (0), regular_count (22) all correct
+            - by_class rollups: 13 class/section groups with correct student counts and financial sums
+            - Filter quick_view=defaulters: Returns 353 rows, all with behavior_tag='defaulter' ✓
+            - Filter quick_view=fully_paid: Returns 22 rows, all with status='paid' and due<=0 ✓
+            - Filter quick_view=upcoming: Returns 0 rows (no upcoming dues in current data)
+            - Filter behavior=late: Returns 0 rows (no late payers in current data)
+            - Filter due_min=5000&due_max=25000: Returns 158 rows, all within range ✓
+            - Filter status_filter=partial: Returns 85 rows, all with status='partial' and 0<paid<expected ✓
+            - Filter payment_date_start=2020-01-01: Returns 107 rows with valid last_payment_date ✓
+            - Filter payment_date_start=2099-01-01: Returns 0 rows (no future payments) ✓
+            - PDF export: Returns 200, application/pdf, 65233 bytes, valid PDF signature ✓
+            - XLSX export: Returns 200, correct MIME type, 35005 bytes, has 3 sheets (Fee Status, Summary, By Class) ✓
+            - CSV export: Returns 200, text/csv, 46979 chars, all required columns present ✓
+            - Regression: PATCH /api/fees/heads/{id} ✓, DELETE /api/fees/heads/{id} ✓, DELETE /api/fees/plans/{id} ✓, GET /api/fees/student/{id}/fee-schedule ✓
+            
+            ❌ FAILED (1/56):
+            - RBAC - Parent access: Parent (9079111899) can access schoolwide fee-status report and gets all 375 student rows. Expected behavior: 403 Forbidden or empty result (parents should not have access to schoolwide reports). 
+              ISSUE: Missing RBAC check on GET /api/reports/fee-status endpoint. The endpoint does not restrict parent role from viewing schoolwide data.
+              LOCATION: backend/server.py line 1615 - @api.get('/reports/fee-status') has no role-based access control.
+              FIX NEEDED: Add role check to restrict this endpoint to super_admin, school_admin, and accountant roles only. Parents should only see their own children's data, not schoolwide reports.
+
   - task: "Fee Head edit/delete endpoints"
     implemented: true
     working: true
@@ -195,7 +247,51 @@ backend:
             All calculations, RBAC, and payment tracking working correctly.
 
 frontend:
-  - task: "Fee Structures — Edit & Delete UI"
+  - task: "Admin Collect Fee — Monthly / Full / Custom tabs"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/FeeCollection.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "3 tabs (Monthly/Full/Custom) after student pick. Month tiles show paid/partial/overdue/pending. Right summary computes total. Uses existing /payments/collect and /payments/razorpay/order endpoints."
+
+  - task: "AssignFeeDialog — Month-wise breakdown preview"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/components/AssignFeeDialog.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Added Monthly (÷12) row and 12-tile Apr→Mar month-wise breakdown preview inside the assign-fees dialog."
+
+  - task: "Reports — Student Fee Status dashboard (revamped)"
+    implemented: true
+    working: "NA"
+    file: "frontend/src/pages/Reports.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Rebuilt Student Fee Status tab:
+              - 5 summary cards (Students, Expected = Fees − Discounts, Paid, Due = Expected − Paid, Collection %).
+              - Class/Section-wise rollup table.
+              - Student table with Paid, Due, Status, Last Payment, Overdue Days, Behavior tag columns.
+              - Filters: multi-select classes/sections, status, behavior, due min/max, last-paid date range.
+              - Quick views: All / Defaulters / Fully paid / Upcoming dues (chip toggles auto-refresh).
+              - Exports (PDF/XLSX/CSV) honour all filters; extra shortcuts for "Export Defaulters" and "Class-wise XLSX".
+              - Uses updated backend /api/reports/fee-status which now returns last_payment_date, overdue_days, behavior_tag, by_class rollup and extended summary.
+
+frontend_placeholder:
     implemented: true
     working: "NA"
     file: "frontend/src/pages/FeesStructure.jsx"
@@ -240,26 +336,42 @@ frontend:
 
 metadata:
   created_by: "main_agent"
-  version: "1.1"
-  test_sequence: 11
+  version: "1.2"
+  test_sequence: 12
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Fee Head edit/delete endpoints"
-    - "Fee Plan delete endpoint"
-    - "Monthly fee schedule endpoint"
-    - "Fee Structures — Edit & Delete UI"
-    - "Parent Pay — Monthly vs Full tabs"
+    - "Admin Collect Fee — Monthly / Full / Custom tabs (frontend, do not test yet)"
+    - "AssignFeeDialog — Month-wise breakdown preview (frontend, do not test yet)"
+    - "Reports — Student Fee Status dashboard (frontend, do not test yet)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
     - agent: "main"
-      message: "Backend endpoints implemented and passed 26/26 automated tests. Frontend built and verified visually. Awaiting user approval for automated frontend testing."
-    - agent: "testing"
-      message: "26/26 backend tests PASSED — all new endpoints working correctly with RBAC, safety checks, and accurate calculations."
+      message: |
+        New iteration adds:
+          1. Admin Collect Fee — Monthly (12-tile grid) + Full (Annual) + Custom Items tabs.
+          2. AssignFeeDialog — monthly (÷12) row and Apr→Mar month tiles preview.
+          3. Reports > Student Fee Status — full dashboard with summary cards
+             (Students / Expected=Fees−Discounts / Paid / Due=Expected−Paid / Collection %),
+             class-section rollup, student table with Last Payment / Overdue Days / Behavior tag,
+             quick view chips (All / Defaulters / Fully paid / Upcoming), filters (behavior,
+             due min/max, last-paid date range), exports (PDF/XLSX/CSV, plus Defaulters and
+             Class-wise shortcuts).
+        Backend changes for the reports dashboard:
+          - GET /api/reports/fee-status now accepts additional query params:
+              due_min, due_max, payment_date_start, payment_date_end, quick_view, behavior.
+            Response includes per-row last_payment_date, overdue_days, behavior_tag, upcoming_due_date,
+            collection_percent; response body also includes `by_class` rollup and expanded `summary`
+            (collection_percent, defaulter_count, late_count, regular_count, upcoming_count).
+            IMPORTANT: Expected = gross_fees - discounts (row.expected reflects net); Due = row.expected - paid.
+          - Fee-status exports (.pdf/.xlsx/.csv) accept the same new params and columns now include
+            Last Payment, Overdue Days, Behavior; XLSX gets a new "By Class" sheet.
+        Test credentials in /app/memory/test_credentials.md.
+        Please test ONLY backend endpoints. Do NOT test any frontend UI automatically.
     - agent: "testing"
       message: |
         ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (26/26 - 100%)
@@ -297,3 +409,23 @@ agent_communication:
         
         All safety checks, RBAC enforcement, and calculations working correctly.
         No issues found. Backend is production-ready.
+    - agent: "testing"
+      message: |
+        🔍 FEE STATUS REPORT EXTENDED TESTING COMPLETE (56 tests, 55 passed, 1 failed - 98.2%)
+        
+        ✅ CORE FUNCTIONALITY WORKING (55/56 tests passed):
+        - All extended fields present and correct
+        - All calculations accurate (expected, due, collection_percent, etc.)
+        - All filters working correctly (quick_view, behavior, due_min/max, status_filter, payment_date_start)
+        - All exports working (PDF, XLSX with 3 sheets, CSV with all columns)
+        - Regression tests passed (earlier endpoints still work)
+        
+        ❌ CRITICAL SECURITY ISSUE (1/56 tests failed):
+        **RBAC Missing on Fee Status Report Endpoint**
+        - Parent role (9079111899) can access GET /api/reports/fee-status and view all 375 students' data
+        - Expected: 403 Forbidden or empty result (parents should NOT have schoolwide report access)
+        - Location: backend/server.py line 1615 - @api.get('/reports/fee-status')
+        - Fix needed: Add role-based access control to restrict endpoint to super_admin, school_admin, and accountant only
+        
+        Detailed test results saved in /app/backend_test.py output.
+        The endpoint is functionally complete but requires RBAC fix before production use.

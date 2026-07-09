@@ -46,6 +46,12 @@ export default function ReportsPage() {
   const [classes, setClasses] = useState([]);
   const [selections, setSelections] = useState([]); // [{class_id, class_name, section}]
   const [statusFilter, setStatusFilter] = useState('all');
+  const [behaviorFilter, setBehaviorFilter] = useState('all');
+  const [quickView, setQuickView] = useState('all'); // all|defaulters|fully_paid|upcoming
+  const [dueMin, setDueMin] = useState('');
+  const [dueMax, setDueMax] = useState('');
+  const [payStart, setPayStart] = useState('');
+  const [payEnd, setPayEnd] = useState('');
   const [search, setSearch] = useState('');
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [selectorSearch, setSelectorSearch] = useState('');
@@ -78,13 +84,24 @@ export default function ReportsPage() {
       const csParam = buildClassSectionsParam(selections);
       if (csParam) params.class_sections = csParam;
       if (statusFilter !== 'all') params.status_filter = statusFilter;
+      if (behaviorFilter !== 'all') params.behavior = behaviorFilter;
+      if (quickView !== 'all') params.quick_view = quickView;
+      if (dueMin !== '') params.due_min = dueMin;
+      if (dueMax !== '') params.due_max = dueMax;
+      if (payStart) params.payment_date_start = payStart;
+      if (payEnd) params.payment_date_end = payEnd;
       const { data } = await api.get('/reports/fee-status', { params });
       setFeeStatusData(data);
     } finally { setLoading(false); }
-  }, [selections, statusFilter]);
+  }, [selections, statusFilter, behaviorFilter, quickView, dueMin, dueMax, payStart, payEnd]);
 
   useEffect(() => { loadClasses(); }, [loadClasses]);
   useEffect(() => { if (activeSchoolId) { runCollection(); runFeeStatus(); } }, [activeSchoolId, runCollection, runFeeStatus]);
+  // Re-run fee-status automatically when quick-view chip changes
+  useEffect(() => {
+    if (activeSchoolId) runFeeStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickView]);
   useEffect(() => {
     const h = () => {
       loadClasses();
@@ -141,29 +158,38 @@ export default function ReportsPage() {
   }, [classes, selectorSearch]);
 
   // Download for fee-status
-  const dlFeeStatus = async (ext) => {
+  const dlFeeStatus = async (ext, opts = {}) => {
     setDlLoading(true);
     try {
       const params = {};
       const csParam = buildClassSectionsParam(selections);
       if (csParam) params.class_sections = csParam;
       if (statusFilter !== 'all') params.status_filter = statusFilter;
+      if (behaviorFilter !== 'all') params.behavior = behaviorFilter;
+      if (quickView !== 'all') params.quick_view = quickView;
+      if (dueMin !== '') params.due_min = dueMin;
+      if (dueMax !== '') params.due_max = dueMax;
+      if (payStart) params.payment_date_start = payStart;
+      if (payEnd) params.payment_date_end = payEnd;
+      // Override quick view for "Defaulters export" shortcut
+      if (opts.overrideQuick) params.quick_view = opts.overrideQuick;
       const resp = await api.get(`/reports/fee-status.${ext}`, { params, responseType: 'blob' });
       const mime = ext === 'pdf' ? 'application/pdf'
         : ext === 'csv' ? 'text/csv'
           : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
       const blob = new Blob([resp.data], { type: mime });
       const url = window.URL.createObjectURL(blob);
+      const fname = opts.filename || `fee_status_report.${ext}`;
       if (ext === 'pdf') {
         window.open(url, '_blank');
       } else {
         const a = document.createElement('a');
         a.href = url;
-        a.download = `fee_status_report.${ext}`;
+        a.download = fname;
         a.click();
         a.remove();
       }
-      toast.success(`Downloaded ${ext.toUpperCase()} report`);
+      toast.success(`Downloaded ${ext.toUpperCase()}${opts.overrideQuick ? ' (defaulters)' : ''}`);
     } catch (err) {
       toast.error(`Failed to download ${ext.toUpperCase()}: ${err?.response?.data?.detail || err.message}`);
     } finally {
@@ -412,6 +438,43 @@ export default function ReportsPage() {
               </div>
             </div>
 
+            {/* Advanced filters row */}
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mt-3 pt-3 border-t border-border">
+              <div className="grid gap-1.5">
+                <Label className="text-xs">Behavior</Label>
+                <Select value={behaviorFilter} onValueChange={setBehaviorFilter}>
+                  <SelectTrigger data-testid="report-behavior-filter"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All</SelectItem>
+                    <SelectItem value="regular">Regular</SelectItem>
+                    <SelectItem value="late">Late</SelectItem>
+                    <SelectItem value="defaulter">Defaulter</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-xs">Due ≥ ₹</Label>
+                <Input type="number" value={dueMin} onChange={(e) => setDueMin(e.target.value)} placeholder="Min" data-testid="report-due-min" />
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-xs">Due ≤ ₹</Label>
+                <Input type="number" value={dueMax} onChange={(e) => setDueMax(e.target.value)} placeholder="Max" data-testid="report-due-max" />
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-xs">Last Paid ≥</Label>
+                <Input type="date" value={payStart} onChange={(e) => setPayStart(e.target.value)} data-testid="report-pay-start" />
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-xs">Last Paid ≤</Label>
+                <Input type="date" value={payEnd} onChange={(e) => setPayEnd(e.target.value)} data-testid="report-pay-end" />
+              </div>
+              <div className="flex items-end">
+                <Button variant="outline" className="w-full" onClick={() => {
+                  setBehaviorFilter('all'); setDueMin(''); setDueMax(''); setPayStart(''); setPayEnd(''); setQuickView('all');
+                }} data-testid="report-clear-filters">Clear all</Button>
+              </div>
+            </div>
+
             {/* Selected chips */}
             {selections.length > 0 && (
               <div className="mt-3 pt-3 border-t border-border">
@@ -482,43 +545,180 @@ export default function ReportsPage() {
 
           {feeStatusData && (
             <>
+              {/* Summary cards */}
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
-                <Card className="p-3 border-border"><div className="text-xs uppercase text-muted-foreground">Students</div><div className="h-font text-lg font-semibold">{feeStatusData.count}</div></Card>
-                <Card className="p-3 border-border"><div className="text-xs uppercase text-muted-foreground">Expected</div><div className="h-font text-lg font-semibold tabular-nums">{shortMoney(feeStatusData.summary.total_expected)}</div></Card>
-                <Card className="p-3 border-border bg-[#E6F6F4]"><div className="text-xs uppercase text-[#0F766E]">Paid</div><div className="h-font text-lg font-semibold tabular-nums">{shortMoney(feeStatusData.summary.total_paid)}</div></Card>
-                <Card className="p-3 border-border bg-[#FEE4E2]"><div className="text-xs uppercase text-[#B42318]">Due</div><div className="h-font text-lg font-semibold tabular-nums">{shortMoney(feeStatusData.summary.total_due)}</div></Card>
-                <Card className="p-3 border-border"><div className="text-xs uppercase text-muted-foreground">Paid/Partial/Unpaid</div><div className="h-font text-lg font-semibold">{feeStatusData.summary.paid_count} / {feeStatusData.summary.partial_count} / {feeStatusData.summary.unpaid_count}</div></Card>
+                <Card className="p-3 border-border" data-testid="fs-card-students">
+                  <div className="text-xs uppercase text-muted-foreground">Students</div>
+                  <div className="h-font text-lg font-semibold">{feeStatusData.count}</div>
+                </Card>
+                <Card className="p-3 border-border" data-testid="fs-card-expected">
+                  <div className="text-xs uppercase text-muted-foreground">Expected</div>
+                  <div className="h-font text-lg font-semibold tabular-nums">{shortMoney(feeStatusData.summary.total_expected)}</div>
+                  <div className="text-[10px] text-muted-foreground">= Fees − Discounts</div>
+                </Card>
+                <Card className="p-3 border-border bg-[#E6F6F4]" data-testid="fs-card-paid">
+                  <div className="text-xs uppercase text-[#0F766E]">Paid</div>
+                  <div className="h-font text-lg font-semibold tabular-nums">{shortMoney(feeStatusData.summary.total_paid)}</div>
+                </Card>
+                <Card className="p-3 border-border bg-[#FEE4E2]" data-testid="fs-card-due">
+                  <div className="text-xs uppercase text-[#B42318]">Due</div>
+                  <div className="h-font text-lg font-semibold tabular-nums">{shortMoney(feeStatusData.summary.total_due)}</div>
+                  <div className="text-[10px] text-[#B42318]/80">= Expected − Paid</div>
+                </Card>
+                <Card className="p-3 border-border" data-testid="fs-card-collection">
+                  <div className="text-xs uppercase text-muted-foreground">Collection %</div>
+                  <div className="h-font text-lg font-semibold tabular-nums">{feeStatusData.summary.collection_percent}%</div>
+                  <div className="text-[10px] text-muted-foreground">
+                    P/Pt/U · {feeStatusData.summary.paid_count} / {feeStatusData.summary.partial_count} / {feeStatusData.summary.unpaid_count}
+                  </div>
+                </Card>
               </div>
+
+              {/* Quick views */}
+              <div className="flex flex-wrap items-center gap-1.5 mb-4">
+                <span className="text-xs text-muted-foreground mr-1">Quick views:</span>
+                {[
+                  { v: 'all', label: 'All students' },
+                  { v: 'defaulters', label: `Defaulters (${feeStatusData.summary.defaulter_count})` },
+                  { v: 'fully_paid', label: `Fully paid (${feeStatusData.summary.paid_count})` },
+                  { v: 'upcoming', label: `Upcoming dues (${feeStatusData.summary.upcoming_count})` },
+                ].map((q) => (
+                  <button
+                    key={q.v}
+                    type="button"
+                    onClick={() => setQuickView(q.v)}
+                    data-testid={`quickview-${q.v}`}
+                    className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                      quickView === q.v
+                        ? 'bg-[hsl(var(--primary))] text-white border-[hsl(var(--primary))]'
+                        : 'border-border hover:bg-secondary'
+                    }`}
+                  >
+                    {q.label}
+                  </button>
+                ))}
+                <div className="mx-2 h-4 w-px bg-border" />
+                <Button size="sm" variant="outline" className="gap-1 h-7"
+                  onClick={() => dlFeeStatus('xlsx', { overrideQuick: 'defaulters', filename: 'defaulters.xlsx' })}
+                  data-testid="dl-defaulters"
+                  disabled={dlLoading || loading}
+                >
+                  <FileSpreadsheet className="h-3 w-3" /> Export Defaulters
+                </Button>
+                <Button size="sm" variant="outline" className="gap-1 h-7"
+                  onClick={() => dlFeeStatus('xlsx', { filename: 'fee_status_by_class.xlsx' })}
+                  data-testid="dl-classwise"
+                  disabled={dlLoading || loading}
+                >
+                  <FileSpreadsheet className="h-3 w-3" /> Class-wise XLSX
+                </Button>
+              </div>
+
+              {/* Class/Section rollup */}
+              {(feeStatusData.by_class || []).length > 0 && (
+                <Card className="border-border overflow-hidden mb-4" data-testid="fs-by-class-table">
+                  <div className="px-4 py-2 border-b border-border bg-secondary/60 text-xs font-medium">
+                    Class-wise / Section-wise Summary ({feeStatusData.by_class.length} row{feeStatusData.by_class.length === 1 ? '' : 's'})
+                  </div>
+                  <div className="max-h-[280px] overflow-y-auto">
+                    <Table>
+                      <TableHeader><TableRow>
+                        <TableHead>Class</TableHead>
+                        <TableHead>Section</TableHead>
+                        <TableHead className="text-right">Students</TableHead>
+                        <TableHead className="text-right">Expected</TableHead>
+                        <TableHead className="text-right">Paid</TableHead>
+                        <TableHead className="text-right">Due</TableHead>
+                        <TableHead className="text-right">Coll %</TableHead>
+                        <TableHead className="text-right">Paid/Pt/U</TableHead>
+                        <TableHead className="text-right">Defaulters</TableHead>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {feeStatusData.by_class.map((b) => (
+                          <TableRow key={`${b.class_id}::${b.section}`}>
+                            <TableCell className="font-medium">{b.class_name}</TableCell>
+                            <TableCell>{b.section}</TableCell>
+                            <TableCell className="text-right tabular-nums">{b.students}</TableCell>
+                            <TableCell className="text-right tabular-nums">{money(b.expected)}</TableCell>
+                            <TableCell className="text-right tabular-nums text-emerald-700">{money(b.paid)}</TableCell>
+                            <TableCell className="text-right tabular-nums text-[#B42318]">{money(b.due)}</TableCell>
+                            <TableCell className="text-right tabular-nums">{b.collection_percent}%</TableCell>
+                            <TableCell className="text-right text-xs">{b.paid_count}/{b.partial_count}/{b.unpaid_count}</TableCell>
+                            <TableCell className="text-right tabular-nums font-medium">{b.defaulters || 0}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </Card>
+              )}
+
+              {/* Student table */}
               <Card className="border-border overflow-hidden" data-testid="report-fee-status-table">
-                <Table>
-                  <TableHeader><TableRow className="bg-secondary/60">
-                    <TableHead>Student</TableHead><TableHead>Class</TableHead><TableHead>Guardian</TableHead>
-                    <TableHead className="text-right">Expected</TableHead><TableHead className="text-right">Discount</TableHead>
-                    <TableHead className="text-right">Paid</TableHead><TableHead className="text-right">Due</TableHead>
-                    <TableHead>Due Date</TableHead><TableHead>Status</TableHead>
-                  </TableRow></TableHeader>
-                  <TableBody>
-                    {filteredRows.length === 0 && <TableRow><TableCell colSpan={9} className="py-8 text-center text-muted-foreground text-sm">No students match filters.</TableCell></TableRow>}
-                    {filteredRows.map((r) => (
-                      <TableRow key={r.student_id} className="hover:bg-secondary/40">
-                        <TableCell>
-                          <div className="font-medium">{r.full_name}</div>
-                          <div className="text-xs text-muted-foreground font-mono">{r.admission_number}</div>
-                        </TableCell>
-                        <TableCell>{r.class_name} {r.section && `• ${r.section}`}</TableCell>
-                        <TableCell><div>{r.father_name || '—'}</div><div className="text-xs text-muted-foreground">{r.phone || '—'}</div></TableCell>
-                        <TableCell className="text-right tabular-nums">{money(r.expected)}</TableCell>
-                        <TableCell className="text-right tabular-nums text-[hsl(var(--accent))]">{money(r.discount)}</TableCell>
-                        <TableCell className="text-right tabular-nums font-medium">{money(r.paid)}</TableCell>
-                        <TableCell className="text-right tabular-nums font-semibold">{money(r.due)}</TableCell>
-                        <TableCell className="text-xs">{r.due_date || '—'}</TableCell>
-                        <TableCell>
-                          <Badge className={r.status === 'paid' ? 'bg-[#E6F6F4] text-[#0F766E] border border-[#BFEAE6]' : r.status === 'partial' ? 'bg-[#FFF3E0] text-[#B45309] border border-[#FFD7A8]' : 'bg-[#FEE4E2] text-[#B42318] border border-[#FECACA]'}>{r.status}</Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                <div className="px-4 py-2 border-b border-border bg-secondary/60 text-xs font-medium flex items-center justify-between">
+                  <span>Students ({filteredRows.length})</span>
+                </div>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader><TableRow>
+                      <TableHead>Student</TableHead>
+                      <TableHead>Class</TableHead>
+                      <TableHead className="text-right">Expected</TableHead>
+                      <TableHead className="text-right">Paid</TableHead>
+                      <TableHead className="text-right">Due</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Last Payment</TableHead>
+                      <TableHead className="text-right">Overdue Days</TableHead>
+                      <TableHead>Behavior</TableHead>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {filteredRows.length === 0 && (
+                        <TableRow><TableCell colSpan={9} className="py-8 text-center text-muted-foreground text-sm">
+                          No students match filters.
+                        </TableCell></TableRow>
+                      )}
+                      {filteredRows.slice(0, 500).map((r) => (
+                        <TableRow key={r.student_id} className="hover:bg-secondary/40">
+                          <TableCell>
+                            <div className="font-medium">{r.full_name}</div>
+                            <div className="text-xs text-muted-foreground font-mono">{r.admission_number}</div>
+                          </TableCell>
+                          <TableCell>{r.class_name}{r.section ? ` · ${r.section}` : ''}</TableCell>
+                          <TableCell className="text-right tabular-nums">{money(r.expected)}</TableCell>
+                          <TableCell className="text-right tabular-nums font-medium">{money(r.paid)}</TableCell>
+                          <TableCell className="text-right tabular-nums font-semibold text-[#B42318]">{money(r.due)}</TableCell>
+                          <TableCell>
+                            <Badge className={r.status === 'paid'
+                              ? 'bg-[#E6F6F4] text-[#0F766E] border border-[#BFEAE6]'
+                              : r.status === 'partial'
+                                ? 'bg-[#FFF3E0] text-[#B45309] border border-[#FFD7A8]'
+                                : 'bg-[#FEE4E2] text-[#B42318] border border-[#FECACA]'}>{r.status}</Badge>
+                          </TableCell>
+                          <TableCell className="text-xs">{r.last_payment_date || '—'}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {r.overdue_days > 0 ? (
+                              <span className="text-[#B42318] font-medium">{r.overdue_days}d</span>
+                            ) : (r.upcoming_due_date ? <span className="text-xs text-muted-foreground">due {r.upcoming_due_date}</span> : '—')}
+                          </TableCell>
+                          <TableCell>
+                            <Badge className={r.behavior_tag === 'regular'
+                              ? 'bg-[#E6F6F4] text-[#0F766E] border border-[#BFEAE6]'
+                              : r.behavior_tag === 'late'
+                                ? 'bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A]'
+                                : r.behavior_tag === 'defaulter'
+                                  ? 'bg-[#FEE4E2] text-[#B42318] border border-[#FECACA]'
+                                  : 'bg-muted text-foreground'}>{r.behavior_tag}</Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                {filteredRows.length > 500 && (
+                  <div className="px-4 py-2 text-xs text-muted-foreground border-t border-border">
+                    Showing first 500 of {filteredRows.length}. Refine filters to narrow down further.
+                  </div>
+                )}
               </Card>
             </>
           )}

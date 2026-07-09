@@ -10,6 +10,27 @@ import { Card } from '@/components/ui/card';
 import { Trash2, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 
+// Helpers for month-wise preview
+const MONTH_ORDER = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3];
+function sessionYear(dueDate) {
+  if (dueDate) {
+    try {
+      const d = new Date(dueDate);
+      const y = d.getFullYear();
+      return d.getMonth() + 1 >= 4 ? y : y - 1;
+    } catch (_e) { /* ignore */ }
+  }
+  const now = new Date();
+  return now.getMonth() + 1 >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+}
+function monthLabels(startYear) {
+  return MONTH_ORDER.map((m, idx) => {
+    const y = m >= 4 ? startYear : startYear + 1;
+    return new Date(y, m - 1, 1).toLocaleString('en-US', { month: 'short', year: '2-digit' });
+  });
+}
+
+
 export function AssignFeeDialog({ open, onOpenChange, student, feePlans, feeHeads, existingAssignment, onSaved }) {
   const [mode, setMode] = useState('plan');  // 'plan' or 'custom'
   const [planId, setPlanId] = useState('');
@@ -157,8 +178,27 @@ export function AssignFeeDialog({ open, onOpenChange, student, feePlans, feeHead
           <Card className="p-3 border-border bg-secondary/50">
             <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">Gross Total</span><span className="tabular-nums font-medium">{money(grossTotal)}</span></div>
             <div className="flex items-center justify-between text-sm mt-1"><span className="text-muted-foreground">Discount</span><span className="tabular-nums text-[hsl(var(--accent))]">- {money(discAmt)}</span></div>
-            <div className="flex items-center justify-between pt-2 border-t border-border mt-2"><span className="text-sm font-semibold">Net Payable</span><span className="h-font text-lg font-semibold tabular-nums">{money(netTotal)}</span></div>
+            <div className="flex items-center justify-between pt-2 border-t border-border mt-2"><span className="text-sm font-semibold">Net Payable (Annual)</span><span className="h-font text-lg font-semibold tabular-nums">{money(netTotal)}</span></div>
+            <div className="flex items-center justify-between pt-2 border-t border-border mt-2">
+              <span className="text-xs text-muted-foreground">Monthly (÷12)</span>
+              <span className="tabular-nums text-sm font-medium">{money(netTotal / 12)} × 12</span>
+            </div>
           </Card>
+
+          {/* Month-wise breakdown preview */}
+          {netTotal > 0 && (
+            <div>
+              <div className="text-xs font-medium mb-2 text-muted-foreground">Month-wise breakdown (Apr → Mar)</div>
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-1.5">
+                {monthLabels(sessionYear(dueDate)).map((label, i) => (
+                  <div key={i} className="rounded border border-border px-2 py-1.5 text-[11px]">
+                    <div className="font-semibold truncate">{label}</div>
+                    <div className="tabular-nums text-muted-foreground">{money(netTotal / 12)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>

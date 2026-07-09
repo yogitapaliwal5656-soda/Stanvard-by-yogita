@@ -1618,7 +1618,13 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
                             class_id: Optional[str] = None,
                             section: Optional[str] = None,
                             class_sections: Optional[str] = None,
-                            status_filter: Optional[str] = None):  # paid|partial|unpaid
+                            status_filter: Optional[str] = None,   # paid|partial|unpaid
+                            due_min: Optional[float] = None,
+                            due_max: Optional[float] = None,
+                            payment_date_start: Optional[str] = None,
+                            payment_date_end: Optional[str] = None,
+                            quick_view: Optional[str] = None,      # defaulters|fully_paid|upcoming
+                            behavior: Optional[str] = None):        # regular|late|defaulter
     """Student fee status report.
 
     Supports both:
@@ -1626,10 +1632,17 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
       - New multi-select: `class_sections` = comma-separated pairs like
         "<class_id>:<section>,<class_id>:,<class_id>:A"
         A blank section (e.g. "abc:") means "all sections of that class".
+
+    Extended fields per row:
+      - last_payment_date (ISO date str or None)
+      - overdue_days (int, 0 if not overdue)
+      - behavior_tag ('regular' | 'late' | 'defaulter' | 'na')
+      - upcoming_due_date (nearest future due date, if any)
+      - collection_percent
+    Plus class/section rollups in `by_class`.
     """
     sid = resolve_school_id(current, school_id, request.headers.get('X-School-Id'))
 
-    # Parse the multi-select class/section pairs (if provided)
     cs_pairs: List[Dict[str, Optional[str]]] = []
     if class_sections:
         for token in class_sections.split(','):
@@ -1658,23 +1671,19 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
             student_q['section'] = section
     students = await students_col.find(student_q, {'_id': 0}).to_list(5000)
 
-    # Build class map
     classes = await classes_col.find({'school_id': sid}, {'_id': 0}).to_list(200)
     class_map = {c['id']: c['name'] for c in classes}
 
-    # Get all assignments & payments in bulk
     student_ids = [s['id'] for s in students]
     assignments = await fee_assignments_col.find({'student_id': {'$in': student_ids}}, {'_id': 0}).to_list(20000)
     payments = await payments_col.find({'student_id': {'$in': student_ids}, 'status': 'success'}, {'_id': 0}).to_list(20000)
 
-    # Plan cache
     plan_cache: Dict[str, Any] = {}
     async def _get_plan(pid):
         if pid not in plan_cache:
             plan_cache[pid] = await fee_plans_col.find_one({'id': pid}, {'_id': 0}) or {}
         return plan_cache[pid]
 
-    # Sum per student
     expected_by_stu: Dict[str, float] = {}
     discount_by_stu: Dict[str, float] = {}
     due_date_by_stu: Dict[str, Optional[str]] = {}
@@ -1689,49 +1698,148 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
         if a.get('due_date') and not due_date_by_stu.get(sid_):
             due_date_by_stu[sid_] = a['due_date']
 
+    # Payment aggregates: total paid, last date, late flag, per-mode counts
     paid_by_stu: Dict[str, float] = {}
+    last_paid_by_stu: Dict[str, Optional[str]] = {}
+    late_flag_by_stu: Dict[str, bool] = {}
     for p in payments:
-        paid_by_stu[p['student_id']] = paid_by_stu.get(p['student_id'], 0.0) + p.get('total_paid', 0)
+        sid_ = p['student_id']
+        paid_by_stu[sid_] = paid_by_stu.get(sid_, 0.0) + p.get('total_paid', 0)
+        pd = (p.get('paid_at') or '')[:10]
+        if pd and (not last_paid_by_stu.get(sid_) or pd > last_paid_by_stu[sid_]):
+            last_paid_by_stu[sid_] = pd
+        # A payment is late if made after the student's due_date.
+        dd = due_date_by_stu.get(sid_)
+        if dd and pd and pd > dd:
+            late_flag_by_stu[sid_] = True
+
+    today = datetime.now().date().isoformat()
+
+    def _behavior_tag(paid: float, due: float, overdue_days: int, was_late: bool, expected: float) -> str:
+        if expected <= 0:
+            return 'na'
+        if due <= 0 and paid > 0:
+            return 'late' if was_late else 'regular'
+        # Still owes something
+        if overdue_days > 30:
+            return 'defaulter'
+        if was_late or overdue_days > 0:
+            return 'late'
+        return 'regular'
 
     rows = []
     for s in students:
         expected = expected_by_stu.get(s['id'], 0.0)
         disc = discount_by_stu.get(s['id'], 0.0)
+        expected_after_disc = max(expected - disc, 0.0)
         paid = paid_by_stu.get(s['id'], 0.0)
-        due = max(expected - disc - paid, 0.0)
+        due = max(expected_after_disc - paid, 0.0)
         row_status = 'unpaid' if paid == 0 else ('paid' if due <= 0 else 'partial')
-        if status_filter and status_filter != row_status:
+        last_paid = last_paid_by_stu.get(s['id'])
+        dd = due_date_by_stu.get(s['id'])
+        overdue_days = 0
+        upcoming_due = None
+        if dd:
+            try:
+                if dd < today and due > 0:
+                    overdue_days = (datetime.fromisoformat(today) - datetime.fromisoformat(dd)).days
+                elif dd >= today:
+                    upcoming_due = dd
+            except Exception:
+                overdue_days = 0
+        was_late = late_flag_by_stu.get(s['id'], False)
+        behavior_tag = _behavior_tag(paid, due, overdue_days, was_late, expected_after_disc)
+        collection_pct = round((paid / expected_after_disc) * 100, 1) if expected_after_disc > 0 else 0.0
+
+        # Filter application
+        if status_filter and status_filter != 'all' and status_filter != row_status:
             continue
+        if due_min is not None and due < due_min:
+            continue
+        if due_max is not None and due > due_max:
+            continue
+        if payment_date_start and (not last_paid or last_paid < payment_date_start):
+            continue
+        if payment_date_end and (not last_paid or last_paid > payment_date_end):
+            continue
+        if behavior and behavior != 'all' and behavior_tag != behavior:
+            continue
+        if quick_view == 'defaulters' and behavior_tag != 'defaulter':
+            continue
+        if quick_view == 'fully_paid' and row_status != 'paid':
+            continue
+        if quick_view == 'upcoming' and not upcoming_due:
+            continue
+
         rows.append({
             'student_id': s['id'],
             'admission_number': s.get('admission_number'),
             'full_name': s.get('full_name'),
+            'class_id': s.get('class_id'),
             'class_name': class_map.get(s.get('class_id'), '-'),
             'section': s.get('section'),
             'phone': s.get('phone'),
             'father_name': s.get('father_name'),
-            'expected': expected,
-            'discount': disc,
-            'paid': paid,
-            'due': due,
-            'due_date': due_date_by_stu.get(s['id']),
+            'expected': round(expected_after_disc, 2),
+            'gross_expected': round(expected, 2),
+            'discount': round(disc, 2),
+            'paid': round(paid, 2),
+            'due': round(due, 2),
+            'collection_percent': collection_pct,
+            'due_date': dd,
+            'upcoming_due_date': upcoming_due,
+            'last_payment_date': last_paid,
+            'overdue_days': overdue_days,
             'status': row_status,
+            'behavior_tag': behavior_tag,
         })
+
     total_expected = sum(r['expected'] for r in rows)
     total_paid = sum(r['paid'] for r in rows)
     total_due = sum(r['due'] for r in rows)
     total_discount = sum(r['discount'] for r in rows)
+    total_gross = sum(r['gross_expected'] for r in rows)
+    collection_pct = round((total_paid / total_expected) * 100, 1) if total_expected > 0 else 0.0
+
+    # Class/Section rollups
+    by_class_map: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        key = f"{r['class_id']}::{r.get('section') or '-'}"
+        b = by_class_map.setdefault(key, {
+            'class_id': r['class_id'], 'class_name': r['class_name'],
+            'section': r.get('section') or '-',
+            'students': 0, 'expected': 0.0, 'paid': 0.0, 'due': 0.0,
+            'paid_count': 0, 'partial_count': 0, 'unpaid_count': 0, 'defaulters': 0,
+        })
+        b['students'] += 1
+        b['expected'] += r['expected']
+        b['paid'] += r['paid']
+        b['due'] += r['due']
+        b[f"{r['status']}_count"] += 1
+        if r['behavior_tag'] == 'defaulter':
+            b['defaulters'] += 1
+    by_class = sorted(by_class_map.values(), key=lambda x: (x['class_name'], x['section']))
+    for b in by_class:
+        b['collection_percent'] = round((b['paid'] / b['expected']) * 100, 1) if b['expected'] > 0 else 0.0
+
     return {
         'rows': rows,
         'count': len(rows),
+        'by_class': by_class,
         'summary': {
             'total_expected': total_expected,
+            'total_gross_expected': total_gross,
             'total_paid': total_paid,
             'total_due': total_due,
             'total_discount': total_discount,
+            'collection_percent': collection_pct,
             'paid_count': sum(1 for r in rows if r['status'] == 'paid'),
             'partial_count': sum(1 for r in rows if r['status'] == 'partial'),
             'unpaid_count': sum(1 for r in rows if r['status'] == 'unpaid'),
+            'defaulter_count': sum(1 for r in rows if r['behavior_tag'] == 'defaulter'),
+            'late_count': sum(1 for r in rows if r['behavior_tag'] == 'late'),
+            'regular_count': sum(1 for r in rows if r['behavior_tag'] == 'regular'),
+            'upcoming_count': sum(1 for r in rows if r['upcoming_due_date']),
         }
     }
 
@@ -1740,7 +1848,8 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
 
 def _fee_status_export_columns() -> List[str]:
     return ['Admission No', 'Student', 'Class', 'Section', 'Guardian', 'Phone',
-            'Expected (Rs.)', 'Discount (Rs.)', 'Paid (Rs.)', 'Due (Rs.)', 'Due Date', 'Status']
+            'Expected (Rs.)', 'Discount (Rs.)', 'Paid (Rs.)', 'Due (Rs.)',
+            'Due Date', 'Last Payment', 'Overdue Days', 'Status', 'Behavior']
 
 
 def _fee_status_row_to_list(r: Dict[str, Any]) -> List[Any]:
@@ -1756,8 +1865,20 @@ def _fee_status_row_to_list(r: Dict[str, Any]) -> List[Any]:
         f"{r.get('paid', 0):,.2f}",
         f"{r.get('due', 0):,.2f}",
         r.get('due_date') or '',
+        r.get('last_payment_date') or '',
+        r.get('overdue_days') or 0,
         (r.get('status') or '').title(),
+        (r.get('behavior_tag') or 'na').title(),
     ]
+
+
+# Shared query args for all fee-status export endpoints
+_FS_QP = dict(
+    school_id=None, class_id=None, section=None, class_sections=None,
+    status_filter=None, due_min=None, due_max=None,
+    payment_date_start=None, payment_date_end=None,
+    quick_view=None, behavior=None,
+)
 
 
 @api.get('/reports/fee-status.pdf')
@@ -1766,25 +1887,39 @@ async def report_fee_status_pdf(request: Request, current=Depends(get_current_us
                                 class_id: Optional[str] = None,
                                 section: Optional[str] = None,
                                 class_sections: Optional[str] = None,
-                                status_filter: Optional[str] = None):
-    data = await report_fee_status(request, current, school_id, class_id, section, class_sections, status_filter)
+                                status_filter: Optional[str] = None,
+                                due_min: Optional[float] = None,
+                                due_max: Optional[float] = None,
+                                payment_date_start: Optional[str] = None,
+                                payment_date_end: Optional[str] = None,
+                                quick_view: Optional[str] = None,
+                                behavior: Optional[str] = None):
+    data = await report_fee_status(request, current, school_id, class_id, section, class_sections,
+                                   status_filter, due_min, due_max, payment_date_start, payment_date_end,
+                                   quick_view, behavior)
     sid = resolve_school_id(current, school_id, request.headers.get('X-School-Id'))
     school = await schools_col.find_one({'id': sid}, {'_id': 0}) or {}
     rows = [_fee_status_row_to_list(r) for r in data['rows']]
     subtitle_bits: List[str] = []
     if class_sections:
         subtitle_bits.append(f"Classes/Sections: {class_sections}")
-    if status_filter:
+    if status_filter and status_filter != 'all':
         subtitle_bits.append(f"Status: {status_filter}")
+    if quick_view:
+        subtitle_bits.append(f"View: {quick_view}")
+    if behavior and behavior != 'all':
+        subtitle_bits.append(f"Behavior: {behavior}")
     subtitle = ' | '.join(subtitle_bits) if subtitle_bits else 'All Classes / Sections'
     summary = {
         'Students': data['count'],
         'Total Expected': f"Rs. {data['summary']['total_expected']:,.2f}",
         'Total Paid': f"Rs. {data['summary']['total_paid']:,.2f}",
         'Total Due': f"Rs. {data['summary']['total_due']:,.2f}",
+        'Collection %': f"{data['summary']['collection_percent']}%",
         'Paid / Partial / Unpaid': (
             f"{data['summary']['paid_count']} / {data['summary']['partial_count']} / {data['summary']['unpaid_count']}"
         ),
+        'Defaulters': data['summary']['defaulter_count'],
     }
     pdf = generate_report_pdf('Student Fee Status Report', subtitle,
                               _fee_status_export_columns(), rows,
@@ -1799,10 +1934,18 @@ async def report_fee_status_xlsx(request: Request, current=Depends(get_current_u
                                  class_id: Optional[str] = None,
                                  section: Optional[str] = None,
                                  class_sections: Optional[str] = None,
-                                 status_filter: Optional[str] = None):
+                                 status_filter: Optional[str] = None,
+                                 due_min: Optional[float] = None,
+                                 due_max: Optional[float] = None,
+                                 payment_date_start: Optional[str] = None,
+                                 payment_date_end: Optional[str] = None,
+                                 quick_view: Optional[str] = None,
+                                 behavior: Optional[str] = None):
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
-    data = await report_fee_status(request, current, school_id, class_id, section, class_sections, status_filter)
+    data = await report_fee_status(request, current, school_id, class_id, section, class_sections,
+                                   status_filter, due_min, due_max, payment_date_start, payment_date_end,
+                                   quick_view, behavior)
     wb = Workbook()
     ws = wb.active
     ws.title = 'Fee Status'
@@ -1828,13 +1971,16 @@ async def report_fee_status_xlsx(request: Request, current=Depends(get_current_u
             r.get('paid', 0),
             r.get('due', 0),
             r.get('due_date') or '',
+            r.get('last_payment_date') or '',
+            r.get('overdue_days') or 0,
             (r.get('status') or '').title(),
+            (r.get('behavior_tag') or 'na').title(),
         ])
-    # Auto-widen columns roughly
-    widths = [16, 26, 14, 10, 22, 14, 14, 14, 14, 14, 14, 12]
+    widths = [16, 26, 14, 10, 22, 14, 14, 14, 14, 14, 12, 14, 12, 12, 12]
     for i, w in enumerate(widths, 1):
-        ws.column_dimensions[chr(64 + i)].width = w
-    # Summary sheet
+        # Use openpyxl utils to handle >26 columns safely
+        from openpyxl.utils import get_column_letter
+        ws.column_dimensions[get_column_letter(i)].width = w
     s = data['summary']
     ws2 = wb.create_sheet('Summary')
     ws2.append(['Metric', 'Value'])
@@ -1844,9 +1990,13 @@ async def report_fee_status_xlsx(request: Request, current=Depends(get_current_u
         'Total Paid (Rs.)': s['total_paid'],
         'Total Due (Rs.)': s['total_due'],
         'Total Discount (Rs.)': s['total_discount'],
+        'Collection %': s['collection_percent'],
         'Paid Students': s['paid_count'],
         'Partial Students': s['partial_count'],
         'Unpaid Students': s['unpaid_count'],
+        'Defaulters': s['defaulter_count'],
+        'Late Payers': s['late_count'],
+        'Regular Payers': s['regular_count'],
     }.items():
         ws2.append([k, v])
     for cell in ws2[1]:
@@ -1854,6 +2004,22 @@ async def report_fee_status_xlsx(request: Request, current=Depends(get_current_u
         cell.fill = header_fill
     ws2.column_dimensions['A'].width = 24
     ws2.column_dimensions['B'].width = 20
+
+    # Class rollup sheet
+    ws3 = wb.create_sheet('By Class')
+    ws3.append(['Class', 'Section', 'Students', 'Expected', 'Paid', 'Due', 'Collection %',
+                'Paid', 'Partial', 'Unpaid', 'Defaulters'])
+    for cell in ws3[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+    for b in data['by_class']:
+        ws3.append([b['class_name'], b['section'], b['students'],
+                    b['expected'], b['paid'], b['due'], b['collection_percent'],
+                    b['paid_count'], b['partial_count'], b['unpaid_count'], b['defaulters']])
+    for col, w in enumerate([14, 10, 10, 14, 14, 14, 12, 8, 8, 8, 10], 1):
+        from openpyxl.utils import get_column_letter
+        ws3.column_dimensions[get_column_letter(col)].width = w
+
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -1867,9 +2033,17 @@ async def report_fee_status_csv(request: Request, current=Depends(get_current_us
                                 class_id: Optional[str] = None,
                                 section: Optional[str] = None,
                                 class_sections: Optional[str] = None,
-                                status_filter: Optional[str] = None):
+                                status_filter: Optional[str] = None,
+                                due_min: Optional[float] = None,
+                                due_max: Optional[float] = None,
+                                payment_date_start: Optional[str] = None,
+                                payment_date_end: Optional[str] = None,
+                                quick_view: Optional[str] = None,
+                                behavior: Optional[str] = None):
     import csv
-    data = await report_fee_status(request, current, school_id, class_id, section, class_sections, status_filter)
+    data = await report_fee_status(request, current, school_id, class_id, section, class_sections,
+                                   status_filter, due_min, due_max, payment_date_start, payment_date_end,
+                                   quick_view, behavior)
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(_fee_status_export_columns())

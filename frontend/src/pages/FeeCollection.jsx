@@ -1,17 +1,18 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { AppShell } from '@/components/layout/AppShell';
-import { api, money, downloadBlob } from '@/lib/api';
-import { Card, CardTitle } from '@/components/ui/card';
+import { api, money } from '@/lib/api';
+import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
-import { Wallet, Search, User, Receipt, Trash2, IndianRupee } from 'lucide-react';
+import { User, Receipt, Trash2, IndianRupee, CalendarDays, CheckCircle2, AlertCircle, Clock, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSchool } from '@/contexts/SchoolContext';
 
@@ -30,7 +31,10 @@ export default function FeeCollection() {
   const [students, setStudents] = useState([]);
   const [studentId, setStudentId] = useState(params.get('student') || '');
   const [selected, setSelected] = useState(null);
-  const [dues, setDues] = useState(null);
+  const [sched, setSched] = useState(null);
+  const [selectedMonths, setSelectedMonths] = useState({}); // {index: true}
+
+  // Manual items (for custom/annual mode)
   const [items, setItems] = useState([]);
   const [discount, setDiscount] = useState(0);
   const [lateFee, setLateFee] = useState(0);
@@ -39,55 +43,118 @@ export default function FeeCollection() {
   const [remarks, setRemarks] = useState('');
   const [saving, setSaving] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [tab, setTab] = useState('monthly'); // monthly | full | custom
 
   const loadStudents = useCallback(async () => {
     if (!activeSchoolId) return;
-    const { data } = await api.get('/students', { params: { limit: 500 } });
+    const { data } = await api.get('/students', { params: { limit: 5000 } });
     setStudents(data);
   }, [activeSchoolId]);
   useEffect(() => { loadStudents(); }, [loadStudents]);
   useEffect(() => {
-    const h = () => { loadStudents(); setStudentId(''); setSelected(null); setItems([]); };
+    const h = () => { loadStudents(); setStudentId(''); setSelected(null); setSched(null); setItems([]); };
     window.addEventListener('stv:school-changed', h);
     return () => window.removeEventListener('stv:school-changed', h);
   }, [loadStudents]);
 
-  useEffect(() => {
-    if (!studentId) { setSelected(null); setDues(null); setItems([]); return; }
-    (async () => {
-      const { data } = await api.get(`/fees/student/${studentId}/dues`);
-      setDues(data); setSelected(data.student);
-      // Pre-fill items with plan items (current month)
-      const now = new Date();
-      const monthLabel = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-      setItems((data.dues || []).slice(0, 3).map((d, i) => ({
+  const loadSchedule = useCallback(async (sid) => {
+    if (!sid) return;
+    const { data } = await api.get(`/fees/student/${sid}/fee-schedule`);
+    setSched(data);
+    setSelected(data.student);
+    setSelectedMonths({});
+    // Pre-fill custom items list from due items (for the custom tab)
+    const now = new Date();
+    const monthLabel = now.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    try {
+      const { data: dues } = await api.get(`/fees/student/${sid}/dues`);
+      setItems((dues.dues || []).slice(0, 5).map((d, i) => ({
         key: `pre-${d.fee_head_id || 'x'}-${i}`,
         fee_head_id: d.fee_head_id, fee_head_name: d.fee_head_name,
-        period: d.frequency === 'yearly' ? '2025-26' : monthLabel,
+        period: d.frequency === 'yearly' ? '2026-27' : monthLabel,
         amount: d.amount, selected: true,
       })));
-    })();
-  }, [studentId]);
+    } catch (_e) { setItems([]); }
+  }, []);
 
+  useEffect(() => {
+    if (!studentId) { setSelected(null); setSched(null); setSelectedMonths({}); setItems([]); return; }
+    loadSchedule(studentId);
+  }, [studentId, loadSchedule]);
+
+  // ----- Monthly tab helpers -----
+  const monthlyItems = useMemo(() => {
+    if (!sched) return [];
+    return (sched.schedule || [])
+      .filter((m) => selectedMonths[m.index] && m.status !== 'paid')
+      .map((m) => ({
+        fee_head_id: null,
+        fee_head_name: (sched.fee_head_names || ['Tuition Fee'])[0],
+        period: m.label,
+        amount: Math.max((m.amount || 0) - (m.paid_amount || 0), 0),
+      }));
+  }, [sched, selectedMonths]);
+  const monthlySubtotal = monthlyItems.reduce((s, i) => s + Number(i.amount || 0), 0);
+  const monthlyTotal = monthlySubtotal + Number(lateFee || 0) - Number(discount || 0);
+
+  const toggleMonth = (m) => {
+    if (m.status === 'paid') return;
+    setSelectedMonths((s) => ({ ...s, [m.index]: !s[m.index] }));
+  };
+  const selectAllPending = () => {
+    const preset = {};
+    (sched?.schedule || []).forEach((m) => { if (m.status !== 'paid') preset[m.index] = true; });
+    setSelectedMonths(preset);
+  };
+
+  // ----- Full tab helpers -----
+  const fullItem = useMemo(() => {
+    if (!sched || sched.remaining_balance <= 0) return null;
+    return [{
+      fee_head_id: null,
+      fee_head_name: (sched.fee_head_names || ['Tuition Fee'])[0],
+      period: `${sched.academic_session} (Annual)`,
+      amount: sched.remaining_balance,
+    }];
+  }, [sched]);
+  // For full mode, prefill discount with plan discount unless admin edited
+  useEffect(() => {
+    if (tab === 'full' && sched && sched.full_payment_discount > 0) {
+      setDiscount(sched.full_payment_discount);
+    } else if (tab !== 'full') {
+      // keep as-is when leaving full tab
+    }
+  }, [tab, sched]);
+  const fullTotal = (sched?.remaining_balance || 0) + Number(lateFee || 0) - Number(discount || 0);
+
+  // ----- Custom tab helpers -----
   const toggleItem = (key) => setItems((prev) => prev.map((it) => it.key === key ? { ...it, selected: !it.selected } : it));
   const updateAmount = (key, v) => setItems((prev) => prev.map((it) => it.key === key ? { ...it, amount: Number(v) } : it));
   const updateField = (key, field, v) => setItems((prev) => prev.map((it) => it.key === key ? { ...it, [field]: v } : it));
   const removeItem = (key) => setItems((prev) => prev.filter((it) => it.key !== key));
-  const activeItems = items.filter((i) => i.selected);
-  const subtotal = activeItems.reduce((s, i) => s + Number(i.amount || 0), 0);
-  const total = subtotal + Number(lateFee || 0) - Number(discount || 0);
+  const activeCustomItems = items.filter((i) => i.selected);
+  const customSubtotal = activeCustomItems.reduce((s, i) => s + Number(i.amount || 0), 0);
+  const customTotal = customSubtotal + Number(lateFee || 0) - Number(discount || 0);
+
+  // ----- Which payload to send -----
+  const currentItems =
+    tab === 'monthly' ? monthlyItems :
+      tab === 'full' ? (fullItem || []) :
+        activeCustomItems.map((i) => ({ fee_head_id: i.fee_head_id, fee_head_name: i.fee_head_name, period: i.period, amount: Number(i.amount) }));
+  const currentTotal = tab === 'monthly' ? monthlyTotal : tab === 'full' ? fullTotal : customTotal;
+  const canSubmit = studentId && currentItems.length > 0 && currentTotal >= 0;
 
   const submit = async () => {
-    if (!studentId || activeItems.length === 0) { toast.error('Select student and at least one fee item'); return; }
+    if (!canSubmit) { toast.error('Select student and at least one fee item'); return; }
     setSaving(true);
     const payload = {
       student_id: studentId,
-      items: activeItems.map((i) => ({ fee_head_id: i.fee_head_id, fee_head_name: i.fee_head_name, period: i.period, amount: Number(i.amount) })),
+      items: currentItems,
       discount: Number(discount || 0),
       late_fee: Number(lateFee || 0),
       payment_mode: mode,
       txn_ref: txnRef,
-      remarks,
+      remarks: remarks || (tab === 'monthly' ? `Monthly fee: ${monthlyItems.map((i) => i.period).join(', ')}` : (tab === 'full' ? 'Annual/Full-year payment' : remarks)),
     };
     try {
       if (mode === 'razorpay') {
@@ -108,7 +175,7 @@ export default function FeeCollection() {
                 action: { label: 'Download Receipt', onClick: () => openReceipt(payment.id) },
               });
               resetForm();
-            } catch (e) { toast.error('Verification failed'); }
+            } catch (_e) { toast.error('Verification failed'); }
           },
           theme: { color: '#0B2F4A' },
         });
@@ -134,22 +201,19 @@ export default function FeeCollection() {
 
   const resetForm = () => {
     setDiscount(0); setLateFee(0); setMode('cash'); setTxnRef(''); setRemarks('');
-    if (studentId) {
-      // refresh dues
-      api.get(`/fees/student/${studentId}/dues`).then(({ data }) => setDues(data));
-    }
+    setSelectedMonths({});
+    if (studentId) loadSchedule(studentId);
   };
-
-  const filteredStudents = students;
 
   return (
     <AppShell>
       <div className="mb-6">
         <h1 className="h-font text-2xl font-semibold">Collect Fee</h1>
-        <p className="text-sm text-muted-foreground">Select student, add fee items, choose payment mode.</p>
+        <p className="text-sm text-muted-foreground">Select student, choose Monthly / Full / Custom mode and collect payment.</p>
       </div>
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         <div className="xl:col-span-2 space-y-4">
+          {/* STUDENT PICKER */}
           <Card className="p-5 border-border">
             <Label className="mb-2 block">Student</Label>
             <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
@@ -167,7 +231,7 @@ export default function FeeCollection() {
                   <CommandList>
                     <CommandEmpty>No students found</CommandEmpty>
                     <CommandGroup>
-                      {filteredStudents.slice(0, 100).map((s) => (
+                      {students.slice(0, 200).map((s) => (
                         <CommandItem key={s.id} value={`${s.full_name} ${s.admission_number}`} onSelect={() => { setStudentId(s.id); setPickerOpen(false); }}>
                           <div className="flex flex-col">
                             <span className="font-medium">{s.full_name}</span>
@@ -180,39 +244,102 @@ export default function FeeCollection() {
                 </Command>
               </PopoverContent>
             </Popover>
-            {dues && (
-              <div className="mt-3 text-xs text-muted-foreground">Previously paid: <span className="font-medium text-foreground tabular-nums">{money(dues.total_paid)}</span></div>
+            {sched && (
+              <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                <StatMini label="Annual" value={money(sched.annual_total)} />
+                <StatMini label="Paid" value={money(sched.total_paid)} tone="emerald" />
+                <StatMini label="Remaining" value={money(sched.remaining_balance)} tone={sched.remaining_balance > 0 ? 'amber' : 'emerald'} />
+                <StatMini label="Monthly (÷12)" value={money(sched.monthly_amount)} />
+              </div>
             )}
           </Card>
 
-          <Card className="p-5 border-border">
-            <div className="flex items-center justify-between mb-3">
-              <div className="text-sm font-medium">Fee Items</div>
-              <Button type="button" variant="outline" size="sm" onClick={() => setItems([...items, { key: `add-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, fee_head_name: 'Custom', period: '', amount: 0, selected: true }])}>+ Add Item</Button>
-            </div>
-            {items.length === 0 && <div className="py-6 text-sm text-muted-foreground text-center">Select a student to load fee items.</div>}
-            <div className="divide-y divide-border">
-              {items.map((it) => (
-                <div key={it.key} className="py-3 grid grid-cols-12 items-center gap-2">
-                  <input type="checkbox" checked={it.selected} onChange={() => toggleItem(it.key)} className="col-span-1" />
-                  <Input className="col-span-5" value={it.fee_head_name} onChange={(e) => updateField(it.key, 'fee_head_name', e.target.value)} />
-                  <Input className="col-span-3" placeholder="Period" value={it.period} onChange={(e) => updateField(it.key, 'period', e.target.value)} />
-                  <div className="col-span-2 relative">
-                    <IndianRupee className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                    <Input className="pl-7 tabular-nums text-right" type="number" value={it.amount} onChange={(e) => updateAmount(it.key, e.target.value)} />
+          {/* PAYMENT MODES */}
+          {sched && (
+            <Card className="p-5 border-border">
+              <Tabs value={tab} onValueChange={setTab}>
+                <TabsList className="grid grid-cols-3 w-full">
+                  <TabsTrigger value="monthly" data-testid="tab-monthly" className="gap-2"><CalendarDays className="h-4 w-4" /> Monthly</TabsTrigger>
+                  <TabsTrigger value="full" data-testid="tab-full" className="gap-2"><Receipt className="h-4 w-4" /> Full (Annual)</TabsTrigger>
+                  <TabsTrigger value="custom" data-testid="tab-custom" className="gap-2"><Plus className="h-4 w-4" /> Custom Items</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="monthly">
+                  <div className="flex items-center justify-between mb-3 mt-4 flex-wrap gap-2">
+                    <div className="text-sm font-medium">Select months to collect</div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <Button size="sm" variant="outline" onClick={selectAllPending} data-testid="select-all-pending">Select all pending</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setSelectedMonths({})}>Clear</Button>
+                    </div>
                   </div>
-                  <button className="col-span-1 text-muted-foreground hover:text-destructive" onClick={() => removeItem(it.key)}><Trash2 className="h-3.5 w-3.5" /></button>
-                </div>
-              ))}
-            </div>
-          </Card>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {(sched.schedule || []).map((m) => (
+                      <MonthTile key={m.index} m={m} selected={!!selectedMonths[m.index]} onToggle={() => toggleMonth(m)} />
+                    ))}
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="full">
+                  <div className="mt-4 space-y-2">
+                    <Row label="Annual fee" value={money(sched.annual_total)} />
+                    {sched.concession > 0 && <Row label="Concession" value={`- ${money(sched.concession)}`} />}
+                    <Row label="Net annual" value={money(sched.net_annual)} />
+                    <Row label="Paid so far" value={`- ${money(sched.total_paid)}`} />
+                    <div className="flex items-center justify-between pt-2 border-t border-border">
+                      <span className="text-sm font-semibold">Remaining balance</span>
+                      <span className="tabular-nums font-semibold">{money(sched.remaining_balance)}</span>
+                    </div>
+                    {sched.annual_discount_percent > 0 && sched.full_payment_discount > 0 && (
+                      <div className="mt-2 rounded-md bg-[#F0FDF4] border border-[#BBF7D0] p-3 text-xs text-[#166534]">
+                        <div className="font-semibold">Full-payment discount: {sched.annual_discount_percent}% ({money(sched.full_payment_discount)}) auto-applied.</div>
+                      </div>
+                    )}
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="custom">
+                  <div className="flex items-center justify-between mb-3 mt-4">
+                    <div className="text-sm font-medium">Custom Fee Items</div>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setItems([...items, { key: `add-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, fee_head_name: 'Custom', period: '', amount: 0, selected: true }])}>+ Add Item</Button>
+                  </div>
+                  <div className="divide-y divide-border">
+                    {items.length === 0 && <div className="py-6 text-sm text-muted-foreground text-center">No items yet.</div>}
+                    {items.map((it) => (
+                      <div key={it.key} className="py-3 grid grid-cols-12 items-center gap-2">
+                        <input type="checkbox" checked={it.selected} onChange={() => toggleItem(it.key)} className="col-span-1" />
+                        <Input className="col-span-5" value={it.fee_head_name} onChange={(e) => updateField(it.key, 'fee_head_name', e.target.value)} />
+                        <Input className="col-span-3" placeholder="Period" value={it.period} onChange={(e) => updateField(it.key, 'period', e.target.value)} />
+                        <div className="col-span-2 relative">
+                          <IndianRupee className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                          <Input className="pl-7 tabular-nums text-right" type="number" value={it.amount} onChange={(e) => updateAmount(it.key, e.target.value)} />
+                        </div>
+                        <button className="col-span-1 text-muted-foreground hover:text-destructive" onClick={() => removeItem(it.key)}><Trash2 className="h-3.5 w-3.5" /></button>
+                      </div>
+                    ))}
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </Card>
+          )}
         </div>
 
+        {/* RIGHT: SUMMARY */}
         <div>
           <Card className="p-5 border-border sticky top-20">
             <div className="text-sm font-semibold mb-3">Payment Summary</div>
             <div className="space-y-2 text-sm">
-              <Row label="Subtotal" value={money(subtotal)} />
+              {tab === 'monthly' && (
+                <>
+                  <Row label="Months selected" value={monthlyItems.length} />
+                  <Row label="Subtotal" value={money(monthlySubtotal)} />
+                </>
+              )}
+              {tab === 'full' && (
+                <Row label="Remaining balance" value={money(sched?.remaining_balance || 0)} />
+              )}
+              {tab === 'custom' && (
+                <Row label="Subtotal" value={money(customSubtotal)} />
+              )}
               <div className="grid gap-1.5">
                 <Label className="text-xs">Discount (₹)</Label>
                 <Input data-testid="fee-collect-discount-input" type="number" value={discount} onChange={(e) => setDiscount(e.target.value)} />
@@ -223,7 +350,7 @@ export default function FeeCollection() {
               </div>
               <div className="flex items-center justify-between pt-3 border-t border-border">
                 <span className="text-sm font-medium">Total Payable</span>
-                <span className="h-font text-xl font-semibold tabular-nums">{money(total)}</span>
+                <span className="h-font text-xl font-semibold tabular-nums">{money(Math.max(currentTotal, 0))}</span>
               </div>
             </div>
             <div className="mt-4">
@@ -247,7 +374,7 @@ export default function FeeCollection() {
               <Label className="text-xs">Remarks</Label>
               <Textarea rows={2} value={remarks} onChange={(e) => setRemarks(e.target.value)} />
             </div>
-            <Button data-testid="fee-collect-generate-receipt-button" onClick={submit} disabled={saving || !studentId || activeItems.length === 0} className="w-full mt-4 h-11 gap-2">
+            <Button data-testid="fee-collect-generate-receipt-button" onClick={submit} disabled={saving || !canSubmit} className="w-full mt-4 h-11 gap-2">
               <Receipt className="h-4 w-4" /> {saving ? 'Processing…' : mode === 'razorpay' ? 'Pay Online' : 'Generate Receipt'}
             </Button>
           </Card>
@@ -260,3 +387,49 @@ export default function FeeCollection() {
 const Row = ({ label, value }) => (
   <div className="flex items-center justify-between"><span className="text-muted-foreground">{label}</span><span className="tabular-nums font-medium">{value}</span></div>
 );
+
+function StatMini({ label, value, tone }) {
+  const t = tone === 'emerald' ? 'text-emerald-600' : tone === 'amber' ? 'text-[#B45309]' : '';
+  return (
+    <div className="rounded-md border border-border px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className={`h-font tabular-nums font-semibold text-sm ${t}`}>{value}</div>
+    </div>
+  );
+}
+
+function MonthTile({ m, selected, onToggle }) {
+  const isPaid = m.status === 'paid';
+  const isPartial = m.status === 'partial';
+  const isOverdue = m.status === 'overdue';
+  const badge = isPaid ? (
+    <Badge className="bg-[#E6F6F4] text-[#0F766E] border border-[#BFEAE6] gap-1"><CheckCircle2 className="h-3 w-3" /> Paid</Badge>
+  ) : isOverdue ? (
+    <Badge className="bg-[#FEF2F2] text-[#B91C1C] border border-[#FECACA] gap-1"><AlertCircle className="h-3 w-3" /> Overdue</Badge>
+  ) : isPartial ? (
+    <Badge className="bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A] gap-1"><Clock className="h-3 w-3" /> Partial</Badge>
+  ) : (
+    <Badge variant="secondary">Pending</Badge>
+  );
+  const due = Math.max((m.amount || 0) - (m.paid_amount || 0), 0);
+  return (
+    <button
+      type="button" onClick={onToggle} disabled={isPaid}
+      data-testid={`month-tile-${m.index}`}
+      className={`text-left rounded-lg border p-3 transition ${
+        isPaid ? 'bg-muted/40 border-border cursor-default opacity-80'
+          : selected ? 'border-[#0B2F4A] ring-2 ring-[#0B2F4A]/20 bg-[#F1F5F9]'
+          : 'border-border hover:border-[#0B2F4A]/40 hover:bg-muted/40'
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="text-sm font-semibold">{m.label}</div>
+        {badge}
+      </div>
+      <div className="text-xs text-muted-foreground">Due: <span className="tabular-nums text-foreground">{money(due)}</span></div>
+      {m.paid_amount > 0 && !isPaid && (
+        <div className="text-[11px] text-emerald-600 mt-1">Paid so far: {money(m.paid_amount)}</div>
+      )}
+    </button>
+  );
+}
