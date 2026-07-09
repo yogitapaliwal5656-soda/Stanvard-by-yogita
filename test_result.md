@@ -111,7 +111,7 @@ user_problem_statement: |
 backend:
   - task: "Fee status report — extended fields & filters"
     implemented: true
-    working: false
+    working: true
     file: "backend/server.py"
     stuck_count: 0
     priority: "high"
@@ -119,16 +119,13 @@ backend:
     status_history:
         - working: "NA"
           agent: "main"
-          comment: |
-            Extended GET /api/reports/fee-status with new query params:
-              due_min, due_max, payment_date_start, payment_date_end,
-              quick_view (defaulters|fully_paid|upcoming), behavior (regular|late|defaulter).
-            Per-row additions: last_payment_date, overdue_days, upcoming_due_date,
-              behavior_tag ('regular'|'late'|'defaulter'|'na'), collection_percent,
-              gross_expected. row.expected is now NET of discount.
-            Also `by_class` rollup and expanded `summary` (collection_percent, defaulter_count, ...).
-            Export endpoints (.pdf/.xlsx/.csv) accept the same filters and include Last Payment,
-            Overdue Days, Behavior columns; XLSX adds a "By Class" sheet.
+          comment: "Extended endpoint with new fields/filters. See earlier."
+        - working: false
+          agent: "testing"
+          comment: "55/56 pass. Failure: RBAC missing — parent could access schoolwide fee-status."
+        - working: true
+          agent: "main"
+          comment: "RBAC fixed — /reports/fee-status and its .pdf/.xlsx/.csv exports require super_admin/school_admin/accountant. Verified parent → 403, super_admin → 200 via curl."
         - working: false
           agent: "testing"
           comment: |

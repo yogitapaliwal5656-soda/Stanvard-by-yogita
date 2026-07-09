@@ -1612,7 +1612,7 @@ async def analytics(request: Request, current=Depends(get_current_user),
 # =====================================================
 # ENHANCED REPORTS - Fee Status per student (paid/pending)
 # =====================================================
-@api.get('/reports/fee-status')
+@api.get('/reports/fee-status', dependencies=[Depends(require_roles('super_admin', 'school_admin', 'accountant'))])
 async def report_fee_status(request: Request, current=Depends(get_current_user),
                             school_id: Optional[str] = None,
                             class_id: Optional[str] = None,
@@ -1881,7 +1881,7 @@ _FS_QP = dict(
 )
 
 
-@api.get('/reports/fee-status.pdf')
+@api.get('/reports/fee-status.pdf', dependencies=[Depends(require_roles('super_admin', 'school_admin', 'accountant'))])
 async def report_fee_status_pdf(request: Request, current=Depends(get_current_user),
                                 school_id: Optional[str] = None,
                                 class_id: Optional[str] = None,
@@ -1928,7 +1928,7 @@ async def report_fee_status_pdf(request: Request, current=Depends(get_current_us
                              headers={'Content-Disposition': 'inline; filename="fee_status_report.pdf"'})
 
 
-@api.get('/reports/fee-status.xlsx')
+@api.get('/reports/fee-status.xlsx', dependencies=[Depends(require_roles('super_admin', 'school_admin', 'accountant'))])
 async def report_fee_status_xlsx(request: Request, current=Depends(get_current_user),
                                  school_id: Optional[str] = None,
                                  class_id: Optional[str] = None,
@@ -2027,7 +2027,7 @@ async def report_fee_status_xlsx(request: Request, current=Depends(get_current_u
                              headers={'Content-Disposition': 'attachment; filename="fee_status_report.xlsx"'})
 
 
-@api.get('/reports/fee-status.csv')
+@api.get('/reports/fee-status.csv', dependencies=[Depends(require_roles('super_admin', 'school_admin', 'accountant'))])
 async def report_fee_status_csv(request: Request, current=Depends(get_current_user),
                                 school_id: Optional[str] = None,
                                 class_id: Optional[str] = None,
