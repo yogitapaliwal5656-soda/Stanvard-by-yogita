@@ -1,30 +1,22 @@
 [
   {
-    "content": "Backend: extend /api/analytics with date range + class/section/status/method filters (fees-only)",
+    "content": "Explore Analytics.jsx and /api/analytics/fees endpoint",
+    "status": "completed"
+  },
+  {
+    "content": "Update backend /api/analytics/fees to include transactions list filtered by date",
+    "status": "completed"
+  },
+  {
+    "content": "Update Analytics.jsx to show transaction table with all details",
+    "status": "completed"
+  },
+  {
+    "content": "Test backend endpoint via curl",
+    "status": "completed"
+  },
+  {
+    "content": "Test frontend via screenshot + testing_agent_v3",
     "status": "in_progress"
-  },
-  {
-    "content": "Backend: add /api/analytics/student/{id}/fee-report.pdf (single student PDF export)",
-    "status": "pending"
-  },
-  {
-    "content": "Backend: add /api/analytics/fees.xlsx/csv/pdf for filtered range export",
-    "status": "pending"
-  },
-  {
-    "content": "Frontend: fully rewrite Analytics.jsx - date preset bar + KPIs + charts + filters",
-    "status": "pending"
-  },
-  {
-    "content": "Frontend: Student search + fee profile section with payment history + overdue",
-    "status": "pending"
-  },
-  {
-    "content": "Frontend: Sticky filter bar + Download PDF/Excel buttons",
-    "status": "pending"
-  },
-  {
-    "content": "Test with testing_agent_v3",
-    "status": "pending"
   }
 ]

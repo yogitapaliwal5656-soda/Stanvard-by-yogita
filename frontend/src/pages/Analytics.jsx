@@ -19,6 +19,7 @@ import {
 import {
   Calendar, IndianRupee, AlertCircle, Wallet, Users, CalendarCheck,
   TrendingDown, Search, FileText, Download, User, CheckCircle2, Clock,
+  Receipt, ChevronLeft, ChevronRight, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -77,6 +78,12 @@ export default function AnalyticsPage() {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState(null);
   const [feeReport, setFeeReport] = useState(null);
+
+  // Transactions table state (in-range)
+  const [txnQuery, setTxnQuery] = useState('');
+  const [txnPage, setTxnPage] = useState(1);
+  const [txnPageSize, setTxnPageSize] = useState(25);
+  const [txnModeFilter, setTxnModeFilter] = useState('all');
 
   const applyPreset = (id) => {
     setPreset(id);
@@ -138,6 +145,59 @@ export default function AnalyticsPage() {
   }, [students, query]);
 
   const modeData = data ? Object.entries(data.by_mode).map(([name, v]) => ({ name: name.replace('_', ' '), value: v.amount, count: v.count })) : [];
+
+  // Transactions filtered & paginated
+  const allTxns = data?.transactions || [];
+  const filteredTxns = useMemo(() => {
+    let list = allTxns;
+    if (txnModeFilter !== 'all') list = list.filter((t) => t.payment_mode === txnModeFilter);
+    if (txnQuery.trim()) {
+      const q = txnQuery.trim().toLowerCase();
+      list = list.filter((t) =>
+        (t.receipt_number || '').toLowerCase().includes(q) ||
+        (t.student_name || '').toLowerCase().includes(q) ||
+        (t.admission_number || '').toLowerCase().includes(q) ||
+        (t.father_name || '').toLowerCase().includes(q) ||
+        (t.phone || '').toLowerCase().includes(q) ||
+        (t.class_name || '').toLowerCase().includes(q) ||
+        (t.txn_ref || '').toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [allTxns, txnQuery, txnModeFilter]);
+  const txnTotalPages = Math.max(1, Math.ceil(filteredTxns.length / txnPageSize));
+  const currentTxnPage = Math.min(txnPage, txnTotalPages);
+  const pagedTxns = filteredTxns.slice((currentTxnPage - 1) * txnPageSize, currentTxnPage * txnPageSize);
+  const txnRangeAmount = filteredTxns.reduce((sum, t) => sum + (t.total_paid || 0), 0);
+
+  useEffect(() => { setTxnPage(1); }, [txnQuery, txnModeFilter, txnPageSize, startDate, endDate, classFilter, sectionFilter, modeFilter]);
+
+  const dlTxnsCsv = () => {
+    if (!filteredTxns.length) { toast.error('No transactions to export'); return; }
+    const rows = [[
+      'Receipt No', 'Date', 'Time', 'Admission No', 'Student Name', 'Class', 'Section',
+      'Father Name', 'Phone', 'Fee Heads', 'Subtotal', 'Discount', 'Late Fee', 'Amount Paid',
+      'Payment Mode', 'Txn Ref', 'Status', 'Collected By', 'Remarks',
+    ]];
+    filteredTxns.forEach((t) => {
+      const dt = t.paid_at || '';
+      rows.push([
+        t.receipt_number, dt.slice(0, 10), dt.slice(11, 19), t.admission_number, t.student_name,
+        t.class_name, t.section, t.father_name, t.phone, t.fee_heads, t.subtotal, t.discount,
+        t.late_fee, t.total_paid, t.payment_mode, t.txn_ref, t.status, t.collected_by_name, t.remarks,
+      ]);
+    });
+    const escape = (v) => {
+      const s = String(v ?? '');
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const csv = rows.map((r) => r.map(escape).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `transactions_${startDate}_to_${endDate}.csv`; a.click(); a.remove();
+  };
+
   const dlReport = async (fmt) => {
     if (!feeReport) { toast.error('Select a student first'); return; }
     if (fmt === 'pdf') {
@@ -302,6 +362,167 @@ export default function AnalyticsPage() {
             </Card>
           </div>
         </>
+      )}
+
+      {/* Transactions Table (in selected date range) */}
+      {data && (
+        <Card className="p-5 border-border mb-4" data-testid="analytics-transactions">
+          <CardHeader className="p-0 mb-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-md bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))] flex items-center justify-center">
+                  <Receipt className="h-4 w-4" />
+                </div>
+                <div>
+                  <CardTitle className="text-sm font-semibold">Transactions in Selected Range</CardTitle>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {filteredTxns.length} transaction{filteredTxns.length === 1 ? '' : 's'} · Total {money(txnRangeAmount)} · {startDate} to {endDate}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />
+                  <Input
+                    value={txnQuery}
+                    onChange={(e) => setTxnQuery(e.target.value)}
+                    placeholder="Search receipt / student / admission / phone…"
+                    className="h-9 pl-8 pr-8 w-[280px] text-sm"
+                    data-testid="txn-search-input"
+                  />
+                  {txnQuery && (
+                    <button
+                      onClick={() => setTxnQuery('')}
+                      className="absolute right-2 top-2.5 text-muted-foreground hover:text-foreground"
+                      aria-label="Clear search"
+                      data-testid="txn-search-clear"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+                <Select value={txnModeFilter} onValueChange={setTxnModeFilter}>
+                  <SelectTrigger className="h-9 w-[150px] text-sm" data-testid="txn-mode-filter">
+                    <SelectValue placeholder="All Modes" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Modes</SelectItem>
+                    {['cash', 'upi', 'card', 'cheque', 'bank_transfer', 'razorpay'].map((m) => (
+                      <SelectItem key={m} value={m}>{m.replace('_', ' ')}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button variant="outline" size="sm" className="gap-1" onClick={dlTxnsCsv} data-testid="txn-download-csv">
+                  <Download className="h-3.5 w-3.5" /> CSV
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="rounded-md border border-border overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-secondary/50">
+                    <TableHead className="whitespace-nowrap">Receipt No.</TableHead>
+                    <TableHead className="whitespace-nowrap">Date &amp; Time</TableHead>
+                    <TableHead>Student</TableHead>
+                    <TableHead className="whitespace-nowrap">Class / Sec</TableHead>
+                    <TableHead>Fee Heads</TableHead>
+                    <TableHead className="whitespace-nowrap">Mode</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Discount</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Late Fee</TableHead>
+                    <TableHead className="text-right whitespace-nowrap">Amount</TableHead>
+                    <TableHead className="whitespace-nowrap">Collected By</TableHead>
+                    <TableHead>Remarks</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pagedTxns.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={11} className="py-10 text-center">
+                        <div className="flex flex-col items-center gap-2 text-muted-foreground">
+                          <Receipt className="h-8 w-8 opacity-40" />
+                          <div className="text-sm">No transactions found for the selected filters.</div>
+                          <div className="text-xs">Try adjusting the date range or filters above.</div>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                  {pagedTxns.map((t) => (
+                    <TableRow key={t.id} data-testid={`txn-row-${t.receipt_number}`}>
+                      <TableCell className="font-mono text-xs">{t.receipt_number}</TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">
+                        <div>{(t.paid_at || '').slice(0, 10)}</div>
+                        <div className="text-muted-foreground">{(t.paid_at || '').slice(11, 16)}</div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="font-medium text-sm">{t.student_name}</div>
+                        <div className="text-xs text-muted-foreground">{t.admission_number} · {t.father_name}</div>
+                      </TableCell>
+                      <TableCell className="text-xs whitespace-nowrap">{t.class_name}{t.section && t.section !== '—' ? ` · ${t.section}` : ''}</TableCell>
+                      <TableCell className="text-xs max-w-[220px] truncate" title={t.fee_heads}>{t.fee_heads}</TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="secondary"
+                          className="capitalize text-[10px] font-medium"
+                          style={{
+                            backgroundColor: `${MODE_COLORS[t.payment_mode] || '#0B2F4A'}1A`,
+                            color: MODE_COLORS[t.payment_mode] || '#0B2F4A',
+                            borderColor: `${MODE_COLORS[t.payment_mode] || '#0B2F4A'}33`,
+                          }}
+                        >
+                          {String(t.payment_mode).replace('_', ' ')}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-xs">{t.discount ? money(t.discount) : '—'}</TableCell>
+                      <TableCell className="text-right tabular-nums text-xs">{t.late_fee ? money(t.late_fee) : '—'}</TableCell>
+                      <TableCell className="text-right tabular-nums font-semibold">{money(t.total_paid)}</TableCell>
+                      <TableCell className="text-xs">{t.collected_by_name}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground max-w-[180px] truncate" title={t.remarks}>{t.remarks || '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+
+            {filteredTxns.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-3 mt-3 text-xs">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <span>Rows per page:</span>
+                  <Select value={String(txnPageSize)} onValueChange={(v) => setTxnPageSize(Number(v))}>
+                    <SelectTrigger className="h-8 w-[70px]" data-testid="txn-page-size"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {[10, 25, 50, 100].map((n) => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <span>
+                    Showing <b>{(currentTxnPage - 1) * txnPageSize + 1}</b>–
+                    <b>{Math.min(currentTxnPage * txnPageSize, filteredTxns.length)}</b> of <b>{filteredTxns.length}</b>
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline" size="sm" className="h-8 gap-1"
+                    disabled={currentTxnPage <= 1}
+                    onClick={() => setTxnPage((p) => Math.max(1, p - 1))}
+                    data-testid="txn-prev-page"
+                  >
+                    <ChevronLeft className="h-3.5 w-3.5" /> Prev
+                  </Button>
+                  <div className="px-2 tabular-nums">Page {currentTxnPage} / {txnTotalPages}</div>
+                  <Button
+                    variant="outline" size="sm" className="h-8 gap-1"
+                    disabled={currentTxnPage >= txnTotalPages}
+                    onClick={() => setTxnPage((p) => Math.min(txnTotalPages, p + 1))}
+                    data-testid="txn-next-page"
+                  >
+                    Next <ChevronRight className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {/* Student Fee Search */}

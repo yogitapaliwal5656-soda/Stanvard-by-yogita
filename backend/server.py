@@ -1626,6 +1626,40 @@ async def fee_analytics(request: Request, current=Depends(get_current_user),
         key=lambda x: x['amount'], reverse=True,
     )
 
+    # Transactions list (enriched, sorted by paid_at desc) for the currently applied filter
+    transactions = []
+    for p in payments:
+        s = stu_by_id.get(p.get('student_id')) or {}
+        items = p.get('items') or []
+        # Compose a compact fee-heads label (e.g., "Tuition, Transport")
+        fee_heads = ', '.join(
+            [i.get('fee_head_name') or '' for i in items if i.get('fee_head_name')]
+        ) or '—'
+        transactions.append({
+            'id': p.get('id'),
+            'receipt_number': p.get('receipt_number') or '—',
+            'paid_at': p.get('paid_at'),
+            'student_id': p.get('student_id'),
+            'student_name': p.get('student_name') or s.get('full_name') or '—',
+            'admission_number': s.get('admission_number') or '—',
+            'class_name': cls_map.get(s.get('class_id'), '—'),
+            'section': s.get('section') or '—',
+            'father_name': s.get('father_name') or '—',
+            'phone': s.get('phone') or '—',
+            'fee_heads': fee_heads,
+            'subtotal': p.get('subtotal', 0),
+            'discount': p.get('discount', 0),
+            'late_fee': p.get('late_fee', 0),
+            'total_paid': p.get('total_paid', 0),
+            'payment_mode': p.get('payment_mode', 'cash'),
+            'txn_ref': p.get('txn_ref') or '',
+            'status': p.get('status', 'success'),
+            'collected_by_name': p.get('collected_by_name') or '—',
+            'remarks': p.get('remarks') or '',
+        })
+    # Sort newest first
+    transactions.sort(key=lambda t: (t.get('paid_at') or ''), reverse=True)
+
     return {
         'kpis': {
             'total_collected': total_collected,
@@ -1646,6 +1680,7 @@ async def fee_analytics(request: Request, current=Depends(get_current_user),
         'monthly': monthly,
         'by_mode': by_mode,
         'by_class': by_class,
+        'transactions': transactions,
         'range': {'start_date': start_date, 'end_date': end_date},
     }
 

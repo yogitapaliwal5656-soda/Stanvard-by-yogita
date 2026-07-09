@@ -214,6 +214,11 @@ class TestRunner:
         self.test("ANALYTICS: GET /analytics/student/{id}/fee-report returns student profile + summary + payments", lambda: self.test_student_fee_report())
         self.test("ANALYTICS: GET /analytics/student/{id}/fee-report.pdf returns PDF blob", lambda: self.test_student_fee_report_pdf())
         self.test("RBAC: Parent can access own student fee report, not others", lambda: self.test_rbac_parent_student_fee_report())
+        
+        # ===== NEW TRANSACTION HISTORY FEATURE =====
+        self.test("ANALYTICS: GET /analytics/fees returns transactions array with enriched payment records", lambda: self.test_analytics_fees_transactions_array())
+        self.test("ANALYTICS: Transactions array respects class_id, section, payment_mode filters", lambda: self.test_analytics_fees_transactions_filters())
+        self.test("ANALYTICS: Transactions array is filtered by start_date and end_date", lambda: self.test_analytics_fees_transactions_date_range())
 
         # Print summary
         print("\n" + "="*70)
@@ -1220,6 +1225,86 @@ class TestRunner:
                     print(f"  ✓ Parent correctly forbidden from accessing other student (403)")
         else:
             print(f"  ⚠ Skipped: Parent has no linked student")
+
+    def test_analytics_fees_transactions_array(self):
+        """Test GET /analytics/fees returns transactions array with enriched payment records"""
+        school_id = self.users['admin_gn']['school_id']
+        today = datetime.now().strftime('%Y-%m-%d')
+        start = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        
+        r = self.get(f'/analytics/fees?start_date={start}&end_date={today}', 'admin_gn', school_id=school_id)
+        data = r.json()
+        
+        # Check transactions array exists
+        assert 'transactions' in data, "Missing transactions array"
+        assert isinstance(data['transactions'], list), "transactions should be a list"
+        
+        # If there are transactions, verify structure
+        if data['transactions']:
+            txn = data['transactions'][0]
+            required_fields = [
+                'receipt_number', 'paid_at', 'student_name', 'admission_number',
+                'class_name', 'section', 'father_name', 'phone', 'fee_heads',
+                'subtotal', 'discount', 'late_fee', 'total_paid', 'payment_mode',
+                'status', 'collected_by_name', 'remarks', 'txn_ref'
+            ]
+            for field in required_fields:
+                assert field in txn, f"Missing transaction field: {field}"
+            
+            # Verify sort order (newest first by paid_at)
+            if len(data['transactions']) > 1:
+                for i in range(len(data['transactions']) - 1):
+                    t1 = data['transactions'][i]['paid_at']
+                    t2 = data['transactions'][i + 1]['paid_at']
+                    assert t1 >= t2, f"Transactions not sorted newest first: {t1} should be >= {t2}"
+            
+            print(f"  ✓ Transactions array structure valid: {len(data['transactions'])} transactions, fields={list(txn.keys())[:5]}...")
+        else:
+            print(f"  ✓ Transactions array present but empty (no payments in range)")
+
+    def test_analytics_fees_transactions_filters(self):
+        """Test transactions array respects class_id, section, payment_mode filters"""
+        school_id = self.users['admin_gn']['school_id']
+        today = datetime.now().strftime('%Y-%m-%d')
+        start = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+        
+        # Get unfiltered
+        r1 = self.get(f'/analytics/fees?start_date={start}&end_date={today}', 'admin_gn', school_id=school_id)
+        data1 = r1.json()
+        unfiltered_count = len(data1['transactions'])
+        
+        # Test class_id filter
+        if self.classes:
+            class_id = self.classes[0]['id']
+            r2 = self.get(f'/analytics/fees?start_date={start}&end_date={today}&class_id={class_id}', 'admin_gn', school_id=school_id)
+            data2 = r2.json()
+            filtered_count = len(data2['transactions'])
+            assert filtered_count <= unfiltered_count, f"Filtered count {filtered_count} should be <= unfiltered {unfiltered_count}"
+            print(f"  ✓ Class filter works on transactions: unfiltered={unfiltered_count}, filtered={filtered_count}")
+        
+        # Test payment_mode filter
+        r3 = self.get(f'/analytics/fees?start_date={start}&end_date={today}&payment_mode=cash', 'admin_gn', school_id=school_id)
+        data3 = r3.json()
+        # All transactions should be cash mode
+        for txn in data3['transactions']:
+            assert txn['payment_mode'] == 'cash', f"Expected cash mode, got {txn['payment_mode']}"
+        print(f"  ✓ Payment mode filter works on transactions: {len(data3['transactions'])} cash transactions")
+
+    def test_analytics_fees_transactions_date_range(self):
+        """Test transactions array is filtered by start_date and end_date"""
+        school_id = self.users['admin_gn']['school_id']
+        
+        # Test with a narrow date range (today only)
+        today = datetime.now().strftime('%Y-%m-%d')
+        r = self.get(f'/analytics/fees?start_date={today}&end_date={today}', 'admin_gn', school_id=school_id)
+        data = r.json()
+        
+        # All transactions should be from today
+        for txn in data['transactions']:
+            txn_date = txn['paid_at'][:10]
+            assert txn_date == today, f"Transaction date {txn_date} should be {today}"
+        
+        print(f"  ✓ Date range filter works on transactions: {len(data['transactions'])} transactions on {today}")
 
 
 if __name__ == '__main__':
