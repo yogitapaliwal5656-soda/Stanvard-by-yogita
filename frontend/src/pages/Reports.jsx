@@ -7,7 +7,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -330,7 +329,11 @@ export default function ReportsPage() {
                         )}
                       </div>
                     </div>
-                    <ScrollArea className="max-h-[340px]">
+                    <div
+                      className="max-h-[360px] overflow-y-auto overscroll-contain"
+                      data-testid="class-selector-scroll"
+                      style={{ scrollbarGutter: 'stable' }}
+                    >
                       <div className="p-2">
                         {filteredClassesForSelector.length === 0 && (
                           <div className="py-6 text-center text-sm text-muted-foreground">No classes match.</div>
@@ -379,7 +382,7 @@ export default function ReportsPage() {
                           );
                         })}
                       </div>
-                    </ScrollArea>
+                    </div>
                     <div className="p-2 border-t border-border flex justify-end">
                       <Button size="sm" onClick={() => setSelectorOpen(false)} data-testid="class-selector-done">
                         Done
