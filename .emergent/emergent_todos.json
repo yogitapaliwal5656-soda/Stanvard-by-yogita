@@ -1,46 +1,30 @@
 [
   {
-    "content": "Backend: extend fee assignment + endpoints (discount, due date)",
-    "status": "completed"
+    "content": "Backend: extend /api/analytics with date range + class/section/status/method filters (fees-only)",
+    "status": "in_progress"
   },
   {
-    "content": "Backend: analytics endpoint",
-    "status": "completed"
+    "content": "Backend: add /api/analytics/student/{id}/fee-report.pdf (single student PDF export)",
+    "status": "pending"
   },
   {
-    "content": "Backend: enhanced reports endpoint",
-    "status": "completed"
+    "content": "Backend: add /api/analytics/fees.xlsx/csv/pdf for filtered range export",
+    "status": "pending"
   },
   {
-    "content": "Backend: user DELETE + reset password endpoints",
-    "status": "completed"
+    "content": "Frontend: fully rewrite Analytics.jsx - date preset bar + KPIs + charts + filters",
+    "status": "pending"
   },
   {
-    "content": "Frontend: Edit Student dialog",
-    "status": "completed"
+    "content": "Frontend: Student search + fee profile section with payment history + overdue",
+    "status": "pending"
   },
   {
-    "content": "Frontend: Assign Fee dialog with discount + due date",
-    "status": "completed"
+    "content": "Frontend: Sticky filter bar + Download PDF/Excel buttons",
+    "status": "pending"
   },
   {
-    "content": "Frontend: Analytics dashboard page",
-    "status": "completed"
-  },
-  {
-    "content": "Frontend: Enhanced Reports page with filters",
-    "status": "completed"
-  },
-  {
-    "content": "Frontend: Users page with edit/delete/reset password",
-    "status": "completed"
-  },
-  {
-    "content": "Frontend: Parent portal shows due dates",
-    "status": "completed"
-  },
-  {
-    "content": "End-to-end testing with testing_agent_v3 - 100% pass",
-    "status": "completed"
+    "content": "Test with testing_agent_v3",
+    "status": "pending"
   }
 ]

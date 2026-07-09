@@ -1465,6 +1465,309 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
     }
 
 
+# =====================================================
+# FEE ANALYTICS (dedicated, filterable)
+# =====================================================
+@api.get('/analytics/fees')
+async def fee_analytics(request: Request, current=Depends(get_current_user),
+                        school_id: Optional[str] = None,
+                        start_date: Optional[str] = None,
+                        end_date: Optional[str] = None,
+                        class_id: Optional[str] = None,
+                        section: Optional[str] = None,
+                        payment_mode: Optional[str] = None,
+                        payment_status: Optional[str] = None):
+    sid = resolve_school_id(current, school_id, request.headers.get('X-School-Id'))
+    today_iso = datetime.now().strftime('%Y-%m-%d')
+
+    # Payment query
+    pq: Dict[str, Any] = {'school_id': sid, 'status': 'success'}
+    if start_date or end_date:
+        rq: Dict[str, Any] = {}
+        if start_date:
+            rq['$gte'] = start_date
+        if end_date:
+            rq['$lte'] = end_date + 'T23:59:59'
+        pq['paid_at'] = rq
+    if payment_mode:
+        pq['payment_mode'] = payment_mode
+    payments_all = await payments_col.find(pq, {'_id': 0}).to_list(50000)
+
+    # Filter by class/section (need student data)
+    students_all = await students_col.find({'school_id': sid}, {'_id': 0}).to_list(20000)
+    stu_by_id = {s['id']: s for s in students_all}
+    def _in_scope(pmt):
+        s = stu_by_id.get(pmt.get('student_id'))
+        if not s:
+            return False
+        if class_id and s.get('class_id') != class_id:
+            return False
+        if section and s.get('section') != section:
+            return False
+        return True
+    payments = [p for p in payments_all if _in_scope(p)]
+
+    total_collected = sum(p.get('total_paid', 0) for p in payments)
+    total_discount = sum(p.get('discount', 0) for p in payments)
+    total_late_fee = sum(p.get('late_fee', 0) for p in payments)
+
+    # Today / month specific (independent of the filter for context KPIs)
+    month_start = datetime.now().strftime('%Y-%m-01')
+    today_payments = await payments_col.find({'school_id': sid, 'status': 'success',
+                                              'paid_at': {'$gte': today_iso, '$lte': today_iso + 'T23:59:59'}}, {'_id': 0}).to_list(5000)
+    month_payments = await payments_col.find({'school_id': sid, 'status': 'success',
+                                              'paid_at': {'$gte': month_start}}, {'_id': 0}).to_list(20000)
+
+    # Expected & pending computation (fee-status logic, filtered by class/section)
+    students_scope = [s for s in students_all if s.get('status') == 'active'
+                      and (not class_id or s.get('class_id') == class_id)
+                      and (not section or s.get('section') == section)]
+    student_ids_scope = [s['id'] for s in students_scope]
+    assignments = await fee_assignments_col.find({'student_id': {'$in': student_ids_scope}}, {'_id': 0}).to_list(50000)
+    plan_cache: Dict[str, Any] = {}
+    async def _get_plan(pid):
+        if pid not in plan_cache:
+            plan_cache[pid] = await fee_plans_col.find_one({'id': pid}, {'_id': 0}) or {}
+        return plan_cache[pid]
+
+    expected_by_stu: Dict[str, float] = {}
+    discount_by_stu: Dict[str, float] = {}
+    for a in assignments:
+        items = a.get('custom_items') or []
+        if not items and a.get('fee_plan_id'):
+            plan = await _get_plan(a['fee_plan_id'])
+            items = plan.get('items', [])
+        expected_by_stu[a['student_id']] = expected_by_stu.get(a['student_id'], 0.0) + sum(i.get('amount', 0) for i in items)
+        discount_by_stu[a['student_id']] = discount_by_stu.get(a['student_id'], 0.0) + a.get('discount_amount', 0)
+
+    paid_by_stu: Dict[str, float] = {}
+    all_paid_by_stu = await payments_col.find({'student_id': {'$in': student_ids_scope}, 'status': 'success'}, {'_id': 0}).to_list(50000)
+    for p in all_paid_by_stu:
+        paid_by_stu[p['student_id']] = paid_by_stu.get(p['student_id'], 0.0) + p.get('total_paid', 0)
+
+    paid_count = 0
+    partial_count = 0
+    unpaid_count = 0
+    total_expected = 0.0
+    total_pending = 0.0
+    for s in students_scope:
+        exp = expected_by_stu.get(s['id'], 0.0)
+        disc = discount_by_stu.get(s['id'], 0.0)
+        pd = paid_by_stu.get(s['id'], 0.0)
+        due = max(exp - disc - pd, 0.0)
+        total_expected += exp
+        total_pending += due
+        if pd <= 0:
+            unpaid_count += 1
+        elif due <= 0:
+            paid_count += 1
+        else:
+            partial_count += 1
+
+    # Apply payment_status filter to KPIs if requested (only for pending/paid student counts)
+    # (already computed all; payment_status just narrows which student cards are displayed - handled client-side)
+
+    # Daily buckets across the filter range (or last 14 days if no range)
+    if start_date and end_date:
+        try:
+            d0 = datetime.strptime(start_date, '%Y-%m-%d')
+            d1 = datetime.strptime(end_date, '%Y-%m-%d')
+        except Exception:
+            d0 = datetime.now() - timedelta(days=13)
+            d1 = datetime.now()
+    else:
+        d0 = datetime.now() - timedelta(days=13)
+        d1 = datetime.now()
+    days = min((d1 - d0).days + 1, 92)  # cap at ~3 months for the daily view
+    daily = []
+    for i in range(days):
+        d = (d0 + timedelta(days=i)).strftime('%Y-%m-%d')
+        amt = sum(p.get('total_paid', 0) for p in payments if (p.get('paid_at') or '').startswith(d))
+        cnt = sum(1 for p in payments if (p.get('paid_at') or '').startswith(d))
+        daily.append({'date': d, 'amount': amt, 'transactions': cnt})
+
+    # Monthly (12 months of current year - independent of filter)
+    year = datetime.now().year
+    monthly = []
+    for m in range(1, 13):
+        m_start = f'{year}-{m:02d}-01'
+        m_end = f'{year}-{m + 1:02d}-01' if m < 12 else f'{year + 1}-01-01'
+        mpays = [p for p in payments_all if m_start <= (p.get('paid_at') or '') < m_end]
+        monthly.append({
+            'month': datetime(year, m, 1).strftime('%b'),
+            'amount': sum(p.get('total_paid', 0) for p in mpays),
+            'transactions': len(mpays),
+        })
+
+    # Payment mode breakdown
+    by_mode: Dict[str, Dict[str, Any]] = {}
+    for p in payments:
+        m = p.get('payment_mode', 'cash')
+        b = by_mode.setdefault(m, {'amount': 0.0, 'count': 0})
+        b['amount'] += p.get('total_paid', 0)
+        b['count'] += 1
+
+    # Class-wise collection
+    classes = await classes_col.find({'school_id': sid}, {'_id': 0}).to_list(200)
+    cls_map = {c['id']: c['name'] for c in classes}
+    by_class_map: Dict[str, Dict[str, Any]] = {}
+    for p in payments:
+        s = stu_by_id.get(p.get('student_id'))
+        if not s:
+            continue
+        cname = cls_map.get(s.get('class_id'), '—')
+        b = by_class_map.setdefault(cname, {'amount': 0.0, 'transactions': 0, 'students': set()})
+        b['amount'] += p.get('total_paid', 0)
+        b['transactions'] += 1
+        b['students'].add(s['id'])
+    by_class = sorted(
+        [{'class_name': k, 'amount': v['amount'], 'transactions': v['transactions'],
+          'students': len(v['students'])} for k, v in by_class_map.items()],
+        key=lambda x: x['amount'], reverse=True,
+    )
+
+    return {
+        'kpis': {
+            'total_collected': total_collected,
+            'total_pending': total_pending,
+            'total_expected': total_expected,
+            'total_paid_students': paid_count,
+            'total_partial_students': partial_count,
+            'total_pending_students': unpaid_count,
+            'today_collection': sum(p.get('total_paid', 0) for p in today_payments),
+            'today_transactions': len(today_payments),
+            'monthly_collection': sum(p.get('total_paid', 0) for p in month_payments),
+            'monthly_transactions': len(month_payments),
+            'total_discount': total_discount,
+            'total_late_fee': total_late_fee,
+            'transactions_in_range': len(payments),
+        },
+        'daily': daily,
+        'monthly': monthly,
+        'by_mode': by_mode,
+        'by_class': by_class,
+        'range': {'start_date': start_date, 'end_date': end_date},
+    }
+
+
+@api.get('/analytics/student/{student_id}/fee-report')
+async def student_fee_report(student_id: str, request: Request, current=Depends(get_current_user)):
+    """Full fee profile for a single student."""
+    student = await students_col.find_one({'id': student_id}, {'_id': 0})
+    if not student:
+        raise HTTPException(404, 'Student not found')
+    if current['role'] != 'super_admin' and student['school_id'] != current.get('school_id'):
+        raise HTTPException(403, 'Forbidden')
+    if current['role'] == 'parent' and current.get('linked_student_id') != student_id:
+        raise HTTPException(403, 'Forbidden')
+
+    assignments = await fee_assignments_col.find({'student_id': student_id}, {'_id': 0}).to_list(50)
+    plan_cache: Dict[str, Any] = {}
+    total_expected = 0.0
+    total_discount = 0.0
+    due_dates: List[str] = []
+    line_items: List[Dict[str, Any]] = []
+    for a in assignments:
+        items = a.get('custom_items') or []
+        if not items and a.get('fee_plan_id'):
+            if a['fee_plan_id'] not in plan_cache:
+                plan_cache[a['fee_plan_id']] = await fee_plans_col.find_one({'id': a['fee_plan_id']}, {'_id': 0}) or {}
+            items = plan_cache[a['fee_plan_id']].get('items', [])
+        for it in items:
+            line_items.append({
+                'fee_head_name': it.get('fee_head_name'),
+                'frequency': it.get('frequency', 'monthly'),
+                'amount': it.get('amount', 0),
+                'due_date': it.get('due_date') or a.get('due_date'),
+            })
+            total_expected += it.get('amount', 0)
+        total_discount += a.get('discount_amount', 0)
+        if a.get('due_date'):
+            due_dates.append(a['due_date'])
+
+    payments = await payments_col.find({'student_id': student_id, 'status': 'success'}, {'_id': 0}).sort('paid_at', -1).to_list(500)
+    total_paid = sum(p.get('total_paid', 0) for p in payments)
+    total_late_paid = sum(p.get('late_fee', 0) for p in payments)
+    balance = max(total_expected - total_discount - total_paid, 0)
+
+    today = datetime.now().date()
+    next_due_date = None
+    days_overdue = 0
+    if due_dates:
+        due_sorted = sorted(due_dates)
+        next_due_date = due_sorted[0]
+        try:
+            dd = datetime.strptime(next_due_date, '%Y-%m-%d').date()
+            if dd < today and balance > 0:
+                days_overdue = (today - dd).days
+        except Exception:
+            pass
+
+    status = 'unpaid' if total_paid == 0 else ('paid' if balance <= 0 else 'partial')
+    last_payment_date = payments[0]['paid_at'][:10] if payments else None
+
+    # Class name
+    class_name = '—'
+    if student.get('class_id'):
+        c = await classes_col.find_one({'id': student['class_id']}, {'_id': 0})
+        if c:
+            class_name = c['name']
+
+    return {
+        'student': {**student, 'class_name': class_name},
+        'summary': {
+            'total_expected': total_expected,
+            'total_discount': total_discount,
+            'total_paid': total_paid,
+            'total_late_paid': total_late_paid,
+            'balance': balance,
+            'status': status,
+            'last_payment_date': last_payment_date,
+            'next_due_date': next_due_date,
+            'days_overdue': days_overdue,
+        },
+        'line_items': line_items,
+        'payments': payments,
+    }
+
+
+@api.get('/analytics/student/{student_id}/fee-report.pdf')
+async def student_fee_report_pdf(student_id: str, request: Request, current=Depends(get_current_user)):
+    data = await student_fee_report(student_id, request, current)
+    school = await schools_col.find_one({'id': data['student']['school_id']}, {'_id': 0}) or {}
+    s = data['student']
+    summary = data['summary']
+
+    cols = ['Receipt No', 'Date', 'Mode', 'Late Fee', 'Discount', 'Amount (Rs.)']
+    rows = []
+    for p in data['payments']:
+        rows.append([
+            p.get('receipt_number', ''),
+            (p.get('paid_at') or '')[:10],
+            str(p.get('payment_mode', '')).replace('_', ' ').title(),
+            f"{p.get('late_fee', 0):,.2f}",
+            f"{p.get('discount', 0):,.2f}",
+            f"{p.get('total_paid', 0):,.2f}",
+        ])
+    subtitle = (f"Student Fee Report — {s.get('full_name')} ({s.get('admission_number')}) — "
+               f"Class {s.get('class_name')} {s.get('section') or ''}")
+    summary_line = {
+        'Total Fee': f"Rs. {summary['total_expected']:,.2f}",
+        'Total Paid': f"Rs. {summary['total_paid']:,.2f}",
+        'Discount': f"Rs. {summary['total_discount']:,.2f}",
+        'Late Fee': f"Rs. {summary['total_late_paid']:,.2f}",
+        'Balance': f"Rs. {summary['balance']:,.2f}",
+        'Status': summary['status'].upper(),
+    }
+    if summary.get('next_due_date'):
+        summary_line['Next Due'] = summary['next_due_date']
+    pdf = generate_report_pdf('Student Fee Report', subtitle, cols, rows,
+                              school.get('name', 'Stanvard School'), summary_line)
+    fname = f'fee_report_{s.get("admission_number", student_id)}.pdf'
+    return StreamingResponse(io.BytesIO(pdf), media_type='application/pdf',
+                             headers={'Content-Disposition': f'inline; filename="{fname}"'})
+
+
 # ------------ Mount router & middlewares ------------
 app.include_router(api)
 

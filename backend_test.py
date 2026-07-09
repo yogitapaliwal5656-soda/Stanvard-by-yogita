@@ -205,6 +205,15 @@ class TestRunner:
         self.test("RBAC: Parent cannot POST /fees/assignments (403)", lambda: self.test_rbac_parent_assign_fee())
         self.test("RBAC: Teacher cannot POST /fees/assignments (403)", lambda: self.test_rbac_teacher_assign_fee())
         self.test("RBAC: Accountant cannot DELETE /users (403)", lambda: self.test_rbac_accountant_delete_user())
+        
+        # ===== NEW ANALYTICS ENDPOINTS (Fee-focused redesign) =====
+        self.test("ANALYTICS: GET /analytics/fees returns kpis + daily + monthly + by_mode + by_class", lambda: self.test_analytics_fees_basic())
+        self.test("ANALYTICS: GET /analytics/fees with class_id filter", lambda: self.test_analytics_fees_class_filter())
+        self.test("ANALYTICS: GET /analytics/fees with payment_mode filter", lambda: self.test_analytics_fees_payment_mode_filter())
+        self.test("ANALYTICS: GET /analytics/fees with empty date range returns 0s", lambda: self.test_analytics_fees_empty_range())
+        self.test("ANALYTICS: GET /analytics/student/{id}/fee-report returns student profile + summary + payments", lambda: self.test_student_fee_report())
+        self.test("ANALYTICS: GET /analytics/student/{id}/fee-report.pdf returns PDF blob", lambda: self.test_student_fee_report_pdf())
+        self.test("RBAC: Parent can access own student fee report, not others", lambda: self.test_rbac_parent_student_fee_report())
 
         # Print summary
         print("\n" + "="*70)
@@ -1053,6 +1062,164 @@ class TestRunner:
             print(f"  ✓ Accountant correctly forbidden from deleting user (403)")
         else:
             print(f"  ⚠ Skipped: No users found for accountant")
+
+    # ===== NEW ANALYTICS ENDPOINTS TESTS =====
+    def test_analytics_fees_basic(self):
+        """Test GET /analytics/fees returns correct structure"""
+        school_id = self.users['admin_gn']['school_id']
+        today = datetime.now().strftime('%Y-%m-%d')
+        start = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        
+        r = self.get(f'/analytics/fees?start_date={start}&end_date={today}', 'admin_gn', school_id=school_id)
+        data = r.json()
+        
+        # Check kpis object with 8+ keys
+        assert 'kpis' in data, "Missing kpis object"
+        kpis = data['kpis']
+        required_kpi_keys = ['total_collected', 'total_pending', 'total_expected', 
+                            'total_paid_students', 'total_partial_students', 'total_pending_students',
+                            'today_collection', 'monthly_collection', 'total_discount', 'total_late_fee']
+        for key in required_kpi_keys:
+            assert key in kpis, f"Missing KPI key: {key}"
+        
+        # Check daily array
+        assert 'daily' in data, "Missing daily array"
+        assert isinstance(data['daily'], list), "daily should be a list"
+        
+        # Check monthly array (12 items)
+        assert 'monthly' in data, "Missing monthly array"
+        assert isinstance(data['monthly'], list), "monthly should be a list"
+        assert len(data['monthly']) == 12, f"monthly should have 12 items, got {len(data['monthly'])}"
+        
+        # Check by_mode object
+        assert 'by_mode' in data, "Missing by_mode object"
+        assert isinstance(data['by_mode'], dict), "by_mode should be a dict"
+        
+        # Check by_class array
+        assert 'by_class' in data, "Missing by_class array"
+        assert isinstance(data['by_class'], list), "by_class should be a list"
+        
+        print(f"  ✓ Analytics fees endpoint structure valid: collected={kpis['total_collected']}, pending={kpis['total_pending']}, daily_points={len(data['daily'])}, by_mode_keys={len(data['by_mode'])}, by_class={len(data['by_class'])}")
+
+    def test_analytics_fees_class_filter(self):
+        """Test /analytics/fees respects class_id filter"""
+        school_id = self.users['admin_gn']['school_id']
+        today = datetime.now().strftime('%Y-%m-%d')
+        start = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+        
+        # Get without filter
+        r1 = self.get(f'/analytics/fees?start_date={start}&end_date={today}', 'admin_gn', school_id=school_id)
+        data1 = r1.json()
+        
+        # Get classes
+        if self.classes:
+            class_id = self.classes[0]['id']
+            r2 = self.get(f'/analytics/fees?start_date={start}&end_date={today}&class_id={class_id}', 'admin_gn', school_id=school_id)
+            data2 = r2.json()
+            
+            # Filtered result should have <= transactions
+            assert data2['kpis']['transactions_in_range'] <= data1['kpis']['transactions_in_range'], \
+                "Filtered result should have fewer or equal transactions"
+            print(f"  ✓ Class filter works: all={data1['kpis']['transactions_in_range']}, filtered={data2['kpis']['transactions_in_range']}")
+        else:
+            print(f"  ⚠ Skipped: No classes found")
+
+    def test_analytics_fees_payment_mode_filter(self):
+        """Test /analytics/fees respects payment_mode filter"""
+        school_id = self.users['admin_gn']['school_id']
+        today = datetime.now().strftime('%Y-%m-%d')
+        start = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+        
+        r = self.get(f'/analytics/fees?start_date={start}&end_date={today}&payment_mode=cash', 'admin_gn', school_id=school_id)
+        data = r.json()
+        
+        # by_mode should only have cash (or be empty if no cash payments)
+        if data['by_mode']:
+            # If there are payments, they should all be cash
+            for mode in data['by_mode'].keys():
+                assert mode == 'cash', f"Expected only 'cash' mode, found '{mode}'"
+        
+        print(f"  ✓ Payment mode filter works: by_mode keys={list(data['by_mode'].keys())}")
+
+    def test_analytics_fees_empty_range(self):
+        """Test /analytics/fees with date range covering no payments returns 0s not error"""
+        school_id = self.users['admin_gn']['school_id']
+        # Use a future date range
+        start = '2030-01-01'
+        end = '2030-01-31'
+        
+        r = self.get(f'/analytics/fees?start_date={start}&end_date={end}', 'admin_gn', school_id=school_id)
+        data = r.json()
+        
+        # Should return 0s, not error
+        assert data['kpis']['total_collected'] == 0, "Empty range should return 0 collected"
+        assert data['kpis']['transactions_in_range'] == 0, "Empty range should return 0 transactions"
+        print(f"  ✓ Empty date range returns 0s correctly")
+
+    def test_student_fee_report(self):
+        """Test GET /analytics/student/{id}/fee-report"""
+        school_id = self.users['admin_gn']['school_id']
+        
+        if self.students:
+            student_id = self.students[0]['id']
+            r = self.get(f'/analytics/student/{student_id}/fee-report', 'admin_gn', school_id=school_id)
+            data = r.json()
+            
+            # Check structure
+            assert 'student' in data, "Missing student object"
+            assert 'summary' in data, "Missing summary object"
+            assert 'line_items' in data, "Missing line_items array"
+            assert 'payments' in data, "Missing payments array"
+            
+            # Check summary fields
+            summary = data['summary']
+            required_summary = ['total_expected', 'total_paid', 'total_discount', 'balance', 
+                              'status', 'next_due_date', 'last_payment_date', 'days_overdue']
+            for key in required_summary:
+                assert key in summary, f"Missing summary key: {key}"
+            
+            print(f"  ✓ Student fee report structure valid: student={data['student']['full_name']}, status={summary['status']}, balance={summary['balance']}, payments={len(data['payments'])}")
+        else:
+            print(f"  ⚠ Skipped: No students found")
+
+    def test_student_fee_report_pdf(self):
+        """Test GET /analytics/student/{id}/fee-report.pdf returns PDF blob"""
+        school_id = self.users['admin_gn']['school_id']
+        
+        if self.students:
+            student_id = self.students[0]['id']
+            r = requests.get(
+                f"{BASE_URL}/analytics/student/{student_id}/fee-report.pdf",
+                headers=self.headers('admin_gn', school_id)
+            )
+            assert r.status_code == 200, f"Expected 200, got {r.status_code}"
+            assert r.headers['content-type'] == 'application/pdf', f"Expected PDF, got {r.headers['content-type']}"
+            assert len(r.content) > 1000, f"PDF too small: {len(r.content)} bytes"
+            print(f"  ✓ Student fee report PDF generated: {len(r.content)} bytes")
+        else:
+            print(f"  ⚠ Skipped: No students found")
+
+    def test_rbac_parent_student_fee_report(self):
+        """Test RBAC: parent can only access their linked student fee report"""
+        # Parent should access their own student
+        if self.users['parent_gn'].get('linked_student_id'):
+            student_id = self.users['parent_gn']['linked_student_id']
+            r = self.get(f'/analytics/student/{student_id}/fee-report', 'parent_gn')
+            assert r.status_code == 200, f"Parent should access own student, got {r.status_code}"
+            print(f"  ✓ Parent can access own student fee report")
+            
+            # Parent tries to access another student - should get 403
+            if self.students:
+                other_student = next((s for s in self.students if s['id'] != student_id), None)
+                if other_student:
+                    r2 = requests.get(
+                        f"{BASE_URL}/analytics/student/{other_student['id']}/fee-report",
+                        headers=self.headers('parent_gn')
+                    )
+                    assert r2.status_code == 403, f"Parent should not access other student, got {r2.status_code}"
+                    print(f"  ✓ Parent correctly forbidden from accessing other student (403)")
+        else:
+            print(f"  ⚠ Skipped: Parent has no linked student")
 
 
 if __name__ == '__main__':
