@@ -74,8 +74,8 @@ export default function Login() {
               { icon: ShieldCheck, t: 'Secure payments & audit-ready records' },
               { icon: Building2, t: 'Kanpur (Girwa), Udaipur · 0294-2493312' },
               { icon: CreditCard, t: 'Cash, UPI, Card, Cheque, Bank Transfer, Online' },
-            ].map((f, i) => (
-              <div key={i} className="flex items-center gap-2 text-sm text-foreground/80">
+            ].map((f) => (
+              <div key={f.t} className="flex items-center gap-2 text-sm text-foreground/80">
                 <f.icon className="h-4 w-4 text-[hsl(var(--accent))]" />
                 <span>{f.t}</span>
               </div>

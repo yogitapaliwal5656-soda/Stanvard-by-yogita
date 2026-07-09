@@ -177,7 +177,7 @@ export default function StudentDetail() {
                     </div>
                     <div className="mt-3 border-t border-border pt-2 space-y-1">
                       {items.slice(0, 6).map((it, i) => (
-                        <div key={i} className="flex items-center justify-between text-xs">
+                        <div key={`${it.fee_head_id || it.fee_head_name}-${i}`} className="flex items-center justify-between text-xs">
                           <span>{it.fee_head_name} <span className="text-muted-foreground">({it.frequency})</span></span>
                           <span className="tabular-nums">{money(it.amount)}</span>
                         </div>

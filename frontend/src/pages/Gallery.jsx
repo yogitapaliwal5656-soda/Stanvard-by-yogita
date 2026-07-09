@@ -46,7 +46,7 @@ export default function GalleryPage() {
         <Dialog open={!!preview} onOpenChange={() => setPreview(null)}>
           <DialogContent className="max-w-3xl"><DialogHeader><DialogTitle>{preview.title}</DialogTitle></DialogHeader>
             <div className="grid grid-cols-2 gap-2">
-              {(preview.photos || []).map((p, i) => <img key={i} src={p} alt="" className="w-full rounded-md" />)}
+              {(preview.photos || []).map((p, i) => <img key={`${p}-${i}`} src={p} alt="" className="w-full rounded-md" />)}
             </div>
           </DialogContent>
         </Dialog>

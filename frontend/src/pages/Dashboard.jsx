@@ -109,7 +109,7 @@ export default function Dashboard() {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={attendancePie} dataKey="value" innerRadius={60} outerRadius={90} paddingAngle={2}>
-                  {attendancePie.map((entry, idx) => <Cell key={idx} fill={entry.color} />)}
+                  {attendancePie.map((entry) => <Cell key={entry.color} fill={entry.color} />)}
                 </Pie>
                 <Tooltip contentStyle={{ background: '#fff', border: '1px solid #E6EAF0', borderRadius: 8, fontSize: 12 }} />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
