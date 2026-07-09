@@ -1,0 +1,73 @@
+{
+  "summary": "Completed comprehensive testing of Super Admin dashboard 400 error fix (iteration 5). Verified defensive fallback in resolve_school_id() prevents 400 errors when super_admin requests arrive without X-School-Id header. All critical flows tested: super admin login without runtime errors, backend defensive fallback, school switching, analytics page, and regression testing for all 5 roles.",
+  "backend_issues": {
+    "critical_bugs": [],
+    "flaky_endpoints": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": [
+    "Backend: Super admin dashboard/summary WITHOUT X-School-Id returns 200 (defensive fallback works)",
+    "Backend: Super admin dashboard/summary WITH X-School-Id returns 200",
+    "Backend: Super admin analytics WITHOUT X-School-Id returns 200 (defensive fallback works)",
+    "Backend: Super admin analytics WITH X-School-Id returns 200",
+    "Backend: School admin dashboard/summary works (has school_id in user)",
+    "Backend: Accountant dashboard/summary works",
+    "Backend: Teacher dashboard/summary works",
+    "Backend: Parent dashboard endpoint doesn't crash",
+    "Frontend: Super admin login produces NO runtime error overlay",
+    "Frontend: Dashboard KPIs render with real numbers (100 students, ₹4,700 today, ₹79,400 monthly)",
+    "Frontend: School switcher visible and functional (Ganesh Nagar · GN)",
+    "Frontend: School switching works - data refreshes correctly (Ganesh Nagar → Kanpur → Ganesh Nagar)",
+    "Frontend: Kanpur school data different from Ganesh Nagar (96 students, ₹4,800 today, ₹83,100 monthly)",
+    "Frontend: Analytics page loads without 400 errors",
+    "Frontend: Analytics shows correct data (₹3,93,000 received, ₹40,75,800 outstanding, 9% collection rate)",
+    "Frontend: School dropdown shows all 3 schools (Ganesh Nagar, Kanpur, Ayar)",
+    "Regression: School Admin (GN) login works - no runtime errors, correct route (/)",
+    "Regression: Accountant (GN) login works - no runtime errors, correct route (/)",
+    "Regression: Teacher (GN) login works - no runtime errors, correct route (/)",
+    "Regression: Parent (GN) login works - no runtime errors, correct route (/parent)",
+    "Regression: Parent dashboard shows correct data (₹270 balance due, 90% attendance, 3 homework)"
+  ],
+  "test_report_links": [
+    "/app/backend_dashboard_test.py"
+  ],
+  "success_percentage": {
+    "backend": "100% (13/13 tests passed)",
+    "frontend": "100% (8/8 critical tests passed)",
+    "regression": "100% (4/4 roles tested successfully)",
+    "overall": "100% (25/25 tests passed)"
+  },
+  "updated_files": [
+    "/app/backend_dashboard_test.py"
+  ],
+  "action_item_for_main_agent": "",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_test_itself": false,
+  "notes": {
+    "critical_fixes_verified": [
+      "✅ Super Admin login sequence produces NO runtime error overlay: Tested with fresh localStorage clear, login, 5-second wait - no 'Uncaught runtime errors: Request failed with status code 400' overlay appeared",
+      "✅ Backend defensive fallback works: GET /api/dashboard/summary without X-School-Id header returns 200 with data from first school (by code order), not 400",
+      "✅ Backend defensive fallback for analytics: GET /api/analytics without X-School-Id header returns 200 with data",
+      "✅ X-School-Id header sent by default: Frontend module-level cache (_activeSchoolId) in api.js ensures header is sent on all requests",
+      "✅ School switching still works: Dashboard data refreshes correctly when switching between schools (Ganesh Nagar ↔ Kanpur)",
+      "✅ Non-super-admin roles see only their assigned school: School admin, accountant, teacher all work correctly with their assigned school_id",
+      "✅ Parent login works: Redirects to /parent route, shows correct student data",
+      "✅ Full E2E flow for all 5 roles: All roles login successfully without any red error overlays",
+      "✅ Analytics page loads without 400s: Previously used same resolve_school_id path, now works with defensive fallback"
+    ],
+    "implementation_details": [
+      "Backend: auth.py lines 70-96 added _default_school_cache and _read_first_school_id_sync() function",
+      "Backend: auth.py lines 98-118 resolve_school_id() now has defensive fallback - if super_admin request has no school scope, falls back to first active school by code order",
+      "Frontend: api.js lines 10-19 added module-level cache _activeSchoolId with setActiveSchoolRef/getActiveSchoolRef exports",
+      "Frontend: api.js line 26 interceptor reads from _activeSchoolId first, falls back to localStorage",
+      "Frontend: SchoolContext.jsx lines 14-17 applyActive() wrapper calls setActiveSchoolRef(id) synchronously alongside setActiveSchoolIdState(id)",
+      "Frontend: SchoolContext.jsx lines 36-41 added useEffect to clear active school when user logs out"
+    ],
+    "race_condition_fix": "The race condition was caused by SchoolContext writing school_id to localStorage asynchronously via React setState, while the axios interceptor was reading it synchronously. The fix adds a module-level cache that is updated synchronously before any React state update, ensuring the interceptor always has the correct school_id available.",
+    "test_coverage": "All features from the review request have been tested and verified working correctly. Both backend API defensive fallback and frontend module-level cache are functioning as expected. No runtime errors detected in any flow."
+  }
+}

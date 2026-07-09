@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { api } from '@/lib/api';
+import { api, setActiveSchoolRef } from '@/lib/api';
 import { useAuth } from './AuthContext';
 
 const SchoolContext = createContext(null);
@@ -7,8 +7,14 @@ const SchoolContext = createContext(null);
 export const SchoolProvider = ({ children }) => {
   const { user } = useAuth();
   const [schools, setSchools] = useState([]);
-  const [activeSchoolId, setActiveSchoolId] = useState(null);
+  const [activeSchoolId, setActiveSchoolIdState] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  // Wrapper that keeps state, localStorage and module-level ref in sync.
+  const applyActive = useCallback((id) => {
+    setActiveSchoolRef(id);
+    setActiveSchoolIdState(id);
+  }, []);
 
   const loadSchools = useCallback(async () => {
     if (!user) return;
@@ -17,22 +23,25 @@ export const SchoolProvider = ({ children }) => {
       const { data } = await api.get('/auth/my-schools');
       setSchools(data);
       const stored = localStorage.getItem('stv_school');
-      if (data.find((s) => s.id === stored)) setActiveSchoolId(stored);
-      else if (user.school_id && data.find((s) => s.id === user.school_id)) {
-        setActiveSchoolId(user.school_id);
-        localStorage.setItem('stv_school', user.school_id);
-      } else if (data.length) {
-        setActiveSchoolId(data[0].id);
-        localStorage.setItem('stv_school', data[0].id);
-      }
+      if (data.find((s) => s.id === stored)) applyActive(stored);
+      else if (user.school_id && data.find((s) => s.id === user.school_id)) applyActive(user.school_id);
+      else if (data.length) applyActive(data[0].id);
+      else applyActive(null);
     } finally { setLoading(false); }
-  }, [user]);
+  }, [user, applyActive]);
 
   useEffect(() => { loadSchools(); }, [loadSchools]);
 
+  // Clear active school when the user logs out
+  useEffect(() => {
+    if (!user) {
+      setSchools([]);
+      applyActive(null);
+    }
+  }, [user, applyActive]);
+
   const switchSchool = (id) => {
-    setActiveSchoolId(id);
-    localStorage.setItem('stv_school', id);
+    applyActive(id);
     // Force page components to re-fetch by dispatching an event
     window.dispatchEvent(new CustomEvent('stv:school-changed', { detail: id }));
   };

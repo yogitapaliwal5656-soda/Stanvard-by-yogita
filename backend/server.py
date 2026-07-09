@@ -46,7 +46,7 @@ from models import (
 )
 from auth import (
     hash_password, verify_password, create_access_token,
-    get_current_user, require_roles, current_school_id, resolve_school_id,
+    get_current_user, require_roles, current_school_id, resolve_school_id, resolve_school_id_safe,
 )
 from audit import log_audit
 from pdf_utils import generate_receipt_pdf, generate_report_pdf
@@ -1112,7 +1112,7 @@ async def report_attendance(request: Request, current=Depends(get_current_user),
 @api.get('/dashboard/summary')
 async def dashboard_summary(request: Request, current=Depends(get_current_user),
                             school_id: Optional[str] = None):
-    sid = resolve_school_id(current, school_id, request.headers.get('X-School-Id'))
+    sid = await resolve_school_id_safe(current, school_id, request.headers.get('X-School-Id'))
     today = datetime.now().strftime('%Y-%m-%d')
     month_start = datetime.now().strftime('%Y-%m-01')
 

@@ -65,19 +65,67 @@ def require_roles(*allowed_roles: str):
     return _dep
 
 
+from typing import Optional
+
+# Module-level cache of "first school id" for the defensive fallback below.
+# Populated lazily on first call; refreshed only if the school no longer exists.
+_default_school_cache: Optional[str] = None
+
+
+def _read_first_school_id_sync() -> Optional[str]:
+    """Best-effort synchronous lookup of the first school id via PyMongo.
+    Used by resolve_school_id when a super_admin request arrives without any
+    school scope selected (e.g. a race between SchoolContext hydration and
+    the first API call after login). Cached in-process."""
+    global _default_school_cache
+    if _default_school_cache:
+        return _default_school_cache
+    try:
+        from pymongo import MongoClient
+        import os as _os
+        _c = MongoClient(_os.environ['MONGO_URL'], serverSelectionTimeoutMS=1500)
+        _db = _c[_os.environ.get('DB_NAME', 'stanvard_erp')]
+        doc = _db['schools'].find_one({'status': {'$ne': 'deleted'}}, {'_id': 0, 'id': 1}, sort=[('code', 1)])
+        _c.close()
+        if doc and doc.get('id'):
+            _default_school_cache = doc['id']
+            return _default_school_cache
+    except Exception:
+        pass
+    return None
+
+
 def resolve_school_id(current_user: dict, requested_school_id: Optional[str], x_school_id: Optional[str] = None) -> str:
     """Resolve which school to scope the operation to.
     - super_admin can specify any school via requested_school_id or X-School-Id header.
     - Others are locked to their assigned school.
+    - Defensive: if a super_admin request arrives with NO school scope
+      (usually due to a first-load timing race), we fall back to the
+      first active school instead of raising 400. This keeps the UI
+      resilient during initial context hydration.
     """
     if current_user['role'] == 'super_admin':
         sid = requested_school_id or x_school_id
-        if not sid:
-            raise HTTPException(status_code=400, detail='school_id required for super admin (send X-School-Id header or in body)')
-        return sid
+        if sid:
+            return sid
+        default = _read_first_school_id_sync()
+        if default:
+            return default
+        raise HTTPException(status_code=400, detail='No schools configured yet')
     if not current_user.get('school_id'):
         raise HTTPException(status_code=403, detail='User has no assigned school')
     return current_user['school_id']
+
+
+async def _default_school_id_for(current_user: dict) -> Optional[str]:
+    """Async variant kept for backward compat; delegates to sync helper."""
+    if current_user.get('school_id'):
+        return current_user['school_id']
+    return _read_first_school_id_sync()
+
+
+async def resolve_school_id_safe(current_user: dict, requested_school_id: Optional[str], x_school_id: Optional[str]) -> str:
+    return resolve_school_id(current_user, requested_school_id, x_school_id)
 
 
 async def current_school_id(request: Request, current_user=Depends(get_current_user)) -> str:
