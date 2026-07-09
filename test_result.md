@@ -257,22 +257,9 @@ test_plan:
 
 agent_communication:
     - agent: "main"
-      message: |
-        New iteration for continuing the ERP.
-        Added editable fee structure (heads + plans) and monthly/full parent payment flow.
-        Backend endpoints to test (all require auth via /api/auth/login):
-          - PATCH /api/fees/heads/{id}     (super_admin/school_admin)
-          - DELETE /api/fees/heads/{id}    (super_admin/school_admin; must 400 when referenced)
-          - DELETE /api/fees/plans/{id}    (super_admin/school_admin; must 400 when referenced)
-          - GET   /api/fees/student/{student_id}/fee-schedule   (auth; parent only for their own children)
-        Verify:
-          1. Fee-schedule shape (annual_total, net_annual, monthly_amount = round(net_annual/12, 2),
-             12-item schedule array Apr→Mar, remaining_balance, payable_full applies annual_discount_percent).
-          2. Delete safety: creating a plan referencing an existing head must block deleting the head (400);
-             deleting a plan used by any assignment must be blocked (400).
-          3. Existing endpoints (student CRUD, payment collection, reports, analytics) must still pass — regression only if time.
-        Test credentials are in /app/memory/test_credentials.md.
-        Do NOT test frontend automatically until user asks.
+      message: "Backend endpoints implemented and passed 26/26 automated tests. Frontend built and verified visually. Awaiting user approval for automated frontend testing."
+    - agent: "testing"
+      message: "26/26 backend tests PASSED — all new endpoints working correctly with RBAC, safety checks, and accurate calculations."
     - agent: "testing"
       message: |
         ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (26/26 - 100%)
