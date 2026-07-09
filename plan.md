@@ -1,9 +1,11 @@
-# plan.md — Stanvard School ERP (Multi-Branch) Development Plan
+# plan.md — Stanvard School ERP (Multi-Branch) Development Plan (Updated)
 
 ## 1) Objectives
 - Deliver a production-ready, multi-tenant School ERP + Parent Portal for 3 initial branches with unlimited future branches.
-- Prove the **core workflow** is solid before app build: **Fee collection → Razorpay payment → verify/webhook → receipt PDF**.
-- Build a modern, responsive UI (React + shadcn/ui + Tailwind) with role-based UX and a school switcher.
+- Ensure **multi-branch isolation** with independent data per school + a robust **school switcher**.
+- Prove the **core workflow** is solid before mobile app build: **Fee collection → Razorpay order → verification/webhook → receipt PDF**.
+- Build a modern, responsive UI (React + shadcn/ui + Tailwind) with role-based UX (Super Admin, Admin, Accountant, Teacher, Parent).
+- Provide fee-first visibility: **fee analytics, receipts, and transaction history** for any selected date range.
 - Ensure security, auditability, and “no hard deletes” across modules.
 
 ---
@@ -22,6 +24,10 @@ Steps
 3. Generate server-side **Fee Receipt PDF** using reportlab:
    - Receipt no, student info, fee heads/amounts, payment mode, txn id, timestamps, school branding.
 4. Store POC outputs locally (json logs + generated PDFs) and document exact payload fields needed for main app.
+
+Status
+- ✅ Completed earlier as part of MVP integration: Razorpay order generation + server-side PDF receipt generation exists in the FastAPI app.
+- ⚠️ Note: Production-grade online payment capture/finalization is still a future task (see Upcoming).
 
 User stories (Phase 1)
 1. As an accountant, I can create a Razorpay order for ₹5000 and receive a valid order_id.
@@ -61,8 +67,11 @@ Frontend (React + shadcn/ui + Tailwind)
    - Collect fees (offline + online via Razorpay checkout flow).
    - Receipts list + receipt PDF download.
 
+Status
+- ✅ Completed as part of current MVP: multi-branch architecture, RBAC authentication, school switcher, student management, advanced fee management, Razorpay order generation, PDF receipts, reports dashboard.
+
 Testing checkpoint
-- Run testing_agent_v3: one full E2E pass focusing on **fee collection → receipt PDF** plus multi-school scoping sanity.
+- ✅ Completed: repeated testing via `testing_agent_v3` with zero failing flows across prior iterations.
 
 User stories (Phase 2)
 1. As a school admin, I can switch schools and see different dashboards and student lists instantly.
@@ -81,9 +90,17 @@ Steps
 2. Homework + attachments + parent view.
 3. Timetable (class-wise/teacher-wise) + printable view.
 4. Circulars/events/gallery with scheduling, priority, attachments.
-5. Reports: daily/monthly/yearly collection, pending fees, discounts, transactions; export PDF/CSV/Excel.
+5. Reports: daily/monthly/yearly collection, pending fees, discounts, **transactions**; export PDF/CSV/Excel.
 6. Strengthen audit log coverage across all new modules.
 7. Run testing_agent_v3: E2E on attendance + homework + circulars + reports + fees regression.
+
+Status
+- ✅ Analytics Dashboard redesigned to be 100% fee-focused.
+- ✅ **Task 1 COMPLETE:** Transactions on Analytics Dashboard.
+  - Backend: `/api/analytics/fees` returns rich `transactions` array scoped to selected date range + filters.
+  - Frontend: Analytics shows **“Transactions in Selected Range”** with in-card search, mode filter, pagination (10/25/50/100), CSV download, empty state, colored mode badges.
+  - Filters supported: date presets + custom range + class + section + payment mode.
+  - ✅ Tested comprehensively via `testing_agent_v3` (Backend 73/73, Frontend 27/27, no regressions).
 
 User stories (Phase 3)
 1. As a teacher, I can mark today’s attendance for my class and it reflects in the dashboard.
@@ -105,6 +122,10 @@ Steps
 5. Security: rate limiting basics, input validation, file upload constraints, audit log for auth events.
 6. Run testing_agent_v3: full role-based E2E regression.
 
+Status
+- ✅ Authentication + RBAC already implemented in MVP (Super Admin, Admin, Accountant, Teacher, Parent).
+- ⚠️ Deferred hardening remains (see Pending Technical Debt).
+
 User stories (Phase 4)
 1. As a super admin, I can log in and manage schools and users across all branches.
 2. As a school admin, I can only access my assigned school’s data and modules.
@@ -115,15 +136,29 @@ User stories (Phase 4)
 ---
 
 ## 3) Next Actions (Immediate)
-1. Collect Razorpay sandbox credentials + webhook secret from you (or proceed with placeholders until provided).
-2. Execute Phase 1 web-search + build the standalone Python POC for Razorpay + reportlab receipt.
-3. Confirm receipt template fields/logo needs (school name/logo, GST fields if any, signature/stamp).
-4. After Phase 1 passes, start Phase 2 V1 app build in minimal bulk commits.
+1. **Productionize payments (P1):** finalize Razorpay payment lifecycle for go-live (webhook-driven status updates, idempotency, retries, reconciliation reports). Avoid any real capture during testing.
+2. **Refactor backend structure (P2):** split monolithic `server.py` into FastAPI routers (students, fees, analytics, reports, auth, etc.).
+3. **Resolve pending code-review technical debt (P2):**
+   - Refactor high-complexity functions: `server.py` (`analytics()`, `report_fee_status()`, `dashboard_summary()`), `pdf_utils.py` (`generate_receipt_pdf()`)
+   - Frontend complexity: `AssignFeeDialog.jsx`, `FeeCollection.jsx`, `Reports.jsx`, `EditStudentDialog.jsx`
+4. **Security hardening (P1/P2):** secure token storage (move from localStorage to httpOnly cookies or equivalent mitigation), tighten CSP, and review XSS exposure.
+5. **Extend reporting:** optionally add exports for the new analytics transactions table (server-side export endpoints, if desired).
 
 ---
 
 ## 4) Success Criteria
 - Phase 1: Razorpay order creation + signature verification + webhook verification + valid receipt PDF generation works reliably.
 - Phase 2: Multi-school scoping works end-to-end; fee collection (offline + Razorpay) generates immutable receipts + PDFs.
-- Phase 3: Attendance/homework/circulars/reports functional with exports; no cross-school data leakage.
+- Phase 3: Attendance/homework/circulars/reports functional with exports; **analytics includes drill-down transaction history by filter**; no cross-school data leakage.
 - Phase 4: RBAC enforced on backend and UI; parent portal fully usable; audit logs cover critical operations; regression tests pass.
+
+---
+
+## Appendix — Current Status Snapshot (MVP)
+- ✅ Multi-branch: Ganesh Nagar, Kanpur, Ayar; robust school context switcher.
+- ✅ Role-based access: Super Admin, Admin, Accountant, Teacher, Parent.
+- ✅ Student Management: list/add/edit, scoped per school.
+- ✅ Fee Management: custom assignments, Razorpay order generation, server-side PDF receipt generation.
+- ✅ Analytics: fee-focused KPIs + charts + **transaction history by selected date range** (Task 1 complete).
+- ✅ Testing: `testing_agent_v3` iterations (latest: iteration_7 100% pass; no regressions).
+- ⚠️ Deferred: refactors + secure token storage + payment go-live hardening.
