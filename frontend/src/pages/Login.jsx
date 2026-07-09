@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Card } from '@/components/ui/card';
@@ -13,21 +13,39 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const { login } = useAuth();
+  const { login, user, loading: authLoading } = useAuth();
   const nav = useNavigate();
   const loc = useLocation();
   const demoAccounts = useMemo(() => getDemoAccounts(), []);
 
+  // If already authenticated, bounce to appropriate landing page
+  useEffect(() => {
+    if (!authLoading && user) {
+      const dest = user.role === 'parent' ? '/parent' : '/';
+      nav(dest, { replace: true });
+    }
+  }, [user, authLoading, nav]);
+
   const submit = async (e) => {
     e.preventDefault();
+    const trimmedEmail = (email || '').trim();
+    if (!trimmedEmail || !password) {
+      toast.error('Please enter both email and password');
+      return;
+    }
     setLoading(true);
     try {
-      const u = await login(email, password);
+      const u = await login(trimmedEmail, password);
       toast.success(`Welcome, ${u.full_name}`);
       const dest = u.role === 'parent' ? '/parent' : (loc.state?.from?.pathname || '/');
       nav(dest, { replace: true });
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Login failed');
+      const detail = err.response?.data?.detail;
+      const status = err.response?.status;
+      if (status === 401) toast.error(detail || 'Invalid email or password');
+      else if (status === 403) toast.error(detail || 'Account is inactive');
+      else if (!err.response) toast.error('Cannot reach server. Check your connection.');
+      else toast.error(detail || 'Login failed. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -87,20 +105,24 @@ export default function Login() {
               <Label htmlFor="email">Email</Label>
               <Input
                 id="email" type="email" required autoFocus
+                autoComplete="username"
                 data-testid="login-email-input"
                 value={email} onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@stanvard.school"
+                disabled={loading}
               />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="password">Password</Label>
               <Input
                 id="password" type="password" required
+                autoComplete="current-password"
                 data-testid="login-password-input"
                 value={password} onChange={(e) => setPassword(e.target.value)}
+                disabled={loading}
               />
             </div>
-            <Button data-testid="login-submit-button" type="submit" disabled={loading} className="h-10">
+            <Button data-testid="login-submit-button" type="submit" disabled={loading || !email || !password} className="h-10">
               {loading ? 'Signing in…' : 'Sign In'}
             </Button>
           </form>

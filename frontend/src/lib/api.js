@@ -16,9 +16,14 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (r) => r,
   (err) => {
-    if (err.response && err.response.status === 401) {
+    const status = err.response && err.response.status;
+    const url = (err.config && err.config.url) || '';
+    // Only treat 401 as session expiry when NOT coming from the login endpoint itself.
+    // A failed login attempt (bad credentials) must not wipe a valid existing session.
+    if (status === 401 && !url.includes('/auth/login')) {
       localStorage.removeItem('stv_token');
-      // Don't force redirect here, let route guards handle it
+      // Notify listeners (AuthContext) to clear user state
+      window.dispatchEvent(new Event('stv:auth-expired'));
     }
     return Promise.reject(err);
   }
