@@ -348,10 +348,78 @@ frontend_placeholder:
               - Gracefully toasts when Razorpay is not configured.
               - Verified visually as parent (9079111899 / 111899): 12 months render with correct paid/partial/overdue states.
 
+  - task: "Student Detail — Monthly Fees tab"
+    implemented: true
+    working: true
+    file: "frontend/src/pages/StudentDetail.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: |
+            Added new "Monthly Fees" tab to Student Detail page showing monthly fee schedule:
+              - Tab accessible via [data-testid="student-profile-monthly-tab"] with calendar icon
+              - Displays "Monthly Fee Summary" section with session info and monthly amount
+              - Legend chips showing counts: Paid, Partial, Overdue, Upcoming months
+              - Grid of 12 month cards (Apr-Mar) with status indicators and fee details
+              - Each month card shows: month name, status icon, fee amount, paid amount, due amount
+              - Bottom stats row: Annual Fee, Concession, Total Paid, Balance
+              - Fetches data from GET /api/fees/student/{id}/fee-schedule endpoint
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ COMPREHENSIVE TESTING COMPLETE - ALL TESTS PASSED
+            
+            Tested Monthly Fees tab in Student Detail page (student: Divyansh Dangi, KNP-000):
+            
+            ✓ Tab Navigation:
+              - Monthly Fees tab [data-testid="student-profile-monthly-tab"] is visible and clickable
+              - Tab displays calendar icon and "Monthly Fees" label
+            
+            ✓ Section Title:
+              - "Monthly Fee Summary" heading is visible
+              - Session info displayed: "Session 2026-27 • Monthly ₹2,041.67 (net annual ÷ 12)"
+            
+            ✓ Legend Chips (4/4):
+              - Paid (0) - green chip with checkmark icon
+              - Partial (1) - yellow chip with clock icon
+              - Overdue (2) - red chip with alert icon
+              - Upcoming (9) - gray chip with dashed circle icon
+            
+            ✓ Month Cards (12/12):
+              All 12 month cards [data-testid="sd-month-0" through "sd-month-11"] are visible with correct data:
+              - Apr 2026: PARTIAL status, Fee ₹2,041.67, Paid ₹1,390, Due ₹651.67
+              - May 2026: OVERDUE status, Fee ₹2,041.67, Paid ₹0, Due ₹2,041.67
+              - Jun 2026: OVERDUE status, Fee ₹2,041.67, Paid ₹0, Due ₹2,041.67
+              - Jul 2026 - Mar 2027: UPCOMING status, Fee ₹2,041.67 each
+              Each card displays: month name, status badge, status icon, fee/paid/due amounts
+            
+            ✓ Bottom Stats Row (4/4):
+              - Annual Fee: ₹24,500
+              - Concession: ₹0
+              - Total Paid: ₹1,390
+              - Balance: ₹23,110
+            
+            ✓ Data Accuracy:
+              - Monthly amount calculation correct: ₹24,500 ÷ 12 = ₹2,041.67
+              - Status indicators match payment data (1 partial, 2 overdue, 9 upcoming)
+              - Balance calculation correct: ₹24,500 - ₹1,390 = ₹23,110
+            
+            ✓ Console & Network:
+              - No console errors found
+              - No network errors (all API calls successful)
+              - Backend endpoint /api/fees/student/{id}/fee-schedule working correctly
+            
+            Screenshot saved: .screenshots/monthly_fees_tab_final.png
+            
+            CONCLUSION: Monthly Fees tab is fully functional and displaying correct schedule data with proper status indicators.
+
 metadata:
   created_by: "main_agent"
-  version: "1.2"
-  test_sequence: 13
+  version: "1.3"
+  test_sequence: 14
   run_ui: false
 
 test_plan:
@@ -467,3 +535,36 @@ agent_communication:
         No backend issues found. All API endpoints, calculations, RBAC, and exports working correctly.
         Frontend changes (key props in FeesStructure.jsx, AssignFeeDialog.jsx, and demo config in demoAccounts.js) have NOT affected backend functionality.
         Backend is stable and production-ready.
+    - agent: "testing"
+      message: |
+        ✅ MONTHLY FEES TAB TESTING COMPLETE - ALL TESTS PASSED
+        
+        Tested the new "Monthly Fees" tab in Student Detail page as requested:
+        
+        **Test Flow:**
+        1. ✓ Logged in as Super Admin (superadmin@stanvard.school)
+        2. ✓ Navigated to Students page
+        3. ✓ Opened Student Detail page (Divyansh Dangi, KNP-000)
+        4. ✓ Clicked Monthly Fees tab [data-testid="student-profile-monthly-tab"]
+        
+        **Verification Results:**
+        ✓ Section title "Monthly Fee Summary" displayed
+        ✓ Legend chips showing counts: Paid (0), Partial (1), Overdue (2), Upcoming (9)
+        ✓ All 12 month cards rendered with correct data (Apr 2026 - Mar 2027)
+        ✓ Month cards show proper status indicators and amounts:
+          - Apr 2026: Partial (Fee ₹2,041.67, Paid ₹1,390, Due ₹651.67)
+          - May-Jun 2026: Overdue (Fee ₹2,041.67 each, unpaid)
+          - Jul 2026 - Mar 2027: Upcoming (Fee ₹2,041.67 each)
+        ✓ Bottom stats row: Annual Fee ₹24,500, Concession ₹0, Total Paid ₹1,390, Balance ₹23,110
+        ✓ No console errors
+        ✓ No network errors
+        ✓ Backend API /api/fees/student/{id}/fee-schedule working correctly
+        
+        **Data Accuracy:**
+        - Monthly calculation: ₹24,500 ÷ 12 = ₹2,041.67 ✓
+        - Balance: ₹24,500 - ₹1,390 = ₹23,110 ✓
+        - Status indicators match payment history ✓
+        
+        Screenshot: .screenshots/monthly_fees_tab_final.png
+        
+        **CONCLUSION:** Monthly Fees tab is fully functional and ready for production use.

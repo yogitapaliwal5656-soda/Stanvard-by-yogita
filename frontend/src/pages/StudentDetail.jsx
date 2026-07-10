@@ -8,7 +8,10 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Wallet, Receipt as ReceiptIcon, Pencil, Plus, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft, Wallet, Receipt as ReceiptIcon, Pencil, Plus, Trash2,
+  CalendarDays, CheckCircle2, AlertCircle, Clock, CircleDashed,
+} from 'lucide-react';
 import { EditStudentDialog } from '@/components/EditStudentDialog';
 import { AssignFeeDialog } from '@/components/AssignFeeDialog';
 import { useAuth } from '@/contexts/AuthContext';
@@ -20,6 +23,7 @@ export default function StudentDetail() {
   const { user } = useAuth();
   const [student, setStudent] = useState(null);
   const [dues, setDues] = useState(null);
+  const [schedule, setSchedule] = useState(null);
   const [attendance, setAttendance] = useState([]);
   const [payments, setPayments] = useState([]);
   const [classes, setClasses] = useState([]);
@@ -34,15 +38,17 @@ export default function StudentDetail() {
   const load = useCallback(async () => {
     const { data: s } = await api.get(`/students/${id}`);
     setStudent(s);
-    const [{ data: d }, { data: a }, { data: p }, { data: c }, { data: fp }, { data: fh }] = await Promise.all([
+    const [{ data: d }, { data: a }, { data: p }, { data: c }, { data: fp }, { data: fh }, sched] = await Promise.all([
       api.get(`/fees/student/${id}/dues`),
       api.get('/attendance', { params: { student_id: id } }),
       api.get('/payments', { params: { student_id: id } }),
       api.get('/classes'),
       api.get('/fees/plans'),
       api.get('/fees/heads'),
+      api.get(`/fees/student/${id}/fee-schedule`).catch(() => ({ data: null })),
     ]);
     setDues(d); setAttendance(a); setPayments(p); setClasses(c); setFeePlans(fp); setFeeHeads(fh);
+    setSchedule(sched.data || null);
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
@@ -115,9 +121,12 @@ export default function StudentDetail() {
       </div>
 
       <Tabs defaultValue="info" data-testid="student-profile-tabs">
-        <TabsList>
+        <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="info">Information</TabsTrigger>
           <TabsTrigger value="fees" data-testid="student-profile-fees-tab">Fee Assignments</TabsTrigger>
+          <TabsTrigger value="monthly" data-testid="student-profile-monthly-tab" className="gap-1">
+            <CalendarDays className="h-3.5 w-3.5" /> Monthly Fees
+          </TabsTrigger>
           <TabsTrigger value="attendance" data-testid="student-profile-attendance-tab">Attendance</TabsTrigger>
           <TabsTrigger value="payments">Payment History</TabsTrigger>
         </TabsList>
@@ -189,6 +198,9 @@ export default function StudentDetail() {
             </div>
           </Card>
         </TabsContent>
+        <TabsContent value="monthly">
+          <MonthlyFeesTab schedule={schedule} />
+        </TabsContent>
         <TabsContent value="attendance">
           <Card className="p-6 border-border">
             <div className="grid grid-cols-3 gap-3 mb-4">
@@ -244,5 +256,112 @@ export default function StudentDetail() {
       <EditStudentDialog open={editOpen} onOpenChange={setEditOpen} student={student} classes={classes} onSaved={load} />
       <AssignFeeDialog open={assignOpen} onOpenChange={setAssignOpen} student={student} feePlans={feePlans} feeHeads={feeHeads} existingAssignment={editingAssignment} onSaved={load} />
     </AppShell>
+  );
+}
+
+// -------- Monthly Fees --------
+function MonthlyFeesTab({ schedule }) {
+  if (!schedule) {
+    return (
+      <Card className="p-6 border-border">
+        <div className="text-sm text-muted-foreground">Loading monthly summary…</div>
+      </Card>
+    );
+  }
+  const months = schedule.schedule || [];
+  const paidCount = months.filter((m) => m.status === 'paid').length;
+  const overdueCount = months.filter((m) => m.status === 'overdue').length;
+  const partialCount = months.filter((m) => m.status === 'partial').length;
+  const pendingCount = months.filter((m) => m.status === 'pending').length;
+
+  return (
+    <Card className="p-4 md:p-6 border-border">
+      <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-4">
+        <div>
+          <h3 className="h-font text-lg font-semibold">Monthly Fee Summary</h3>
+          <div className="text-xs text-muted-foreground">
+            Session {schedule.academic_session} • Monthly ₹{schedule.monthly_amount?.toLocaleString('en-IN')} (net annual ÷ 12)
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2 text-[11px]">
+          <LegendChip icon={<CheckCircle2 className="h-3 w-3" />} label={`Paid (${paidCount})`} cls="bg-[#E6F6F4] text-[#0F766E] border-[#BFEAE6]" />
+          <LegendChip icon={<Clock className="h-3 w-3" />} label={`Partial (${partialCount})`} cls="bg-[#FEF3C7] text-[#92400E] border-[#FDE68A]" />
+          <LegendChip icon={<AlertCircle className="h-3 w-3" />} label={`Overdue (${overdueCount})`} cls="bg-[#FEE4E2] text-[#B42318] border-[#FECACA]" />
+          <LegendChip icon={<CircleDashed className="h-3 w-3" />} label={`Upcoming (${pendingCount})`} cls="bg-muted text-muted-foreground border-border" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 md:gap-3">
+        {months.map((m) => <MonthCard key={m.index} m={m} />)}
+      </div>
+
+      <div className="mt-5 grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+        <MiniStat label="Annual Fee" value={`₹${(schedule.annual_total || 0).toLocaleString('en-IN')}`} />
+        <MiniStat label="Concession" value={`₹${(schedule.concession || 0).toLocaleString('en-IN')}`} tone="amber" />
+        <MiniStat label="Total Paid" value={`₹${(schedule.total_paid || 0).toLocaleString('en-IN')}`} tone="emerald" />
+        <MiniStat label="Balance" value={`₹${(schedule.remaining_balance || 0).toLocaleString('en-IN')}`} tone={schedule.remaining_balance > 0 ? 'red' : 'emerald'} />
+      </div>
+    </Card>
+  );
+}
+
+function MonthCard({ m }) {
+  const status = m.status; // paid | partial | overdue | pending
+  const due = Math.max((m.amount || 0) - (m.paid_amount || 0), 0);
+  const cfg = {
+    paid:    { icon: <CheckCircle2 className="h-4 w-4" />, cls: 'bg-[#E6F6F4] border-[#BFEAE6] text-[#0F766E]', tag: 'Paid' },
+    partial: { icon: <Clock className="h-4 w-4" />,        cls: 'bg-[#FEF3C7] border-[#FDE68A] text-[#92400E]', tag: 'Partial' },
+    overdue: { icon: <AlertCircle className="h-4 w-4" />,  cls: 'bg-[#FEE4E2] border-[#FECACA] text-[#B42318]', tag: 'Overdue' },
+    pending: { icon: <CircleDashed className="h-4 w-4" />, cls: 'bg-muted/40 border-border text-muted-foreground', tag: 'Upcoming' },
+  }[status] || { icon: null, cls: 'bg-muted border-border text-muted-foreground', tag: status };
+  // Compact month label — "Apr 2026"
+  const short = (m.label || '').split(' ');
+  const shortLabel = short.length === 2 ? `${short[0].slice(0, 3)} ${short[1]}` : m.label;
+  return (
+    <div className={`rounded-lg border p-3 ${cfg.cls}`} data-testid={`sd-month-${m.index}`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-sm font-semibold">{shortLabel}</div>
+        <span className="opacity-90">{cfg.icon}</span>
+      </div>
+      <div className="mt-1 text-[11px] uppercase tracking-wide opacity-80">{cfg.tag}</div>
+      <div className="mt-2 text-xs">
+        <div className="flex items-center justify-between">
+          <span className="opacity-70">Fee</span>
+          <span className="tabular-nums">₹{(m.amount || 0).toLocaleString('en-IN')}</span>
+        </div>
+        {status !== 'pending' && (
+          <div className="flex items-center justify-between">
+            <span className="opacity-70">Paid</span>
+            <span className="tabular-nums">₹{(m.paid_amount || 0).toLocaleString('en-IN')}</span>
+          </div>
+        )}
+        {due > 0 && status !== 'pending' && (
+          <div className="flex items-center justify-between font-medium">
+            <span className="opacity-80">Due</span>
+            <span className="tabular-nums">₹{due.toLocaleString('en-IN')}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LegendChip({ icon, label, cls }) {
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border ${cls}`}>
+      {icon}{label}
+    </span>
+  );
+}
+
+function MiniStat({ label, value, tone }) {
+  const toneCls = tone === 'emerald' ? 'text-[#0F766E]'
+    : tone === 'amber' ? 'text-[#B45309]'
+    : tone === 'red' ? 'text-[#B42318]' : '';
+  return (
+    <div className="rounded-md border border-border p-3">
+      <div className="text-[11px] uppercase text-muted-foreground tracking-wide">{label}</div>
+      <div className={`mt-0.5 h-font text-lg font-semibold tabular-nums ${toneCls}`}>{value}</div>
+    </div>
   );
 }
