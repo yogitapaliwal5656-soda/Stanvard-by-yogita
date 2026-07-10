@@ -2,12 +2,13 @@
 from io import BytesIO
 from datetime import datetime
 from typing import List, Dict, Any
-from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.pagesizes import A4, A5, landscape
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, PageBreak
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, PageBreak,
+    KeepInFrame,
 )
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
 
@@ -56,36 +57,57 @@ def _num_to_words_inr(n: float) -> str:
     return ' '.join(parts) + ' Rupees Only'
 
 
-def generate_receipt_pdf(payment: Dict[str, Any], school: Dict[str, Any], student: Dict[str, Any]) -> bytes:
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer, pagesize=A4,
-        leftMargin=18 * mm, rightMargin=18 * mm,
-        topMargin=15 * mm, bottomMargin=15 * mm,
-        title=f"Fee Receipt - {payment.get('receipt_number', '')}"
-    )
-    styles = getSampleStyleSheet()
+def _build_receipt_flowables(payment: Dict[str, Any], school: Dict[str, Any],
+                             student: Dict[str, Any], copy_label: str,
+                             styles) -> list:
+    """Build the flowables for ONE receipt copy (Office or Parent).
+
+    Designed to fit inside an A5-portrait sized column (roughly 138mm wide).
+    """
     story = []
 
-    # Header
-    header_style = ParagraphStyle('h', parent=styles['Title'], fontSize=20,
-                                  textColor=colors.HexColor('#0B2F4A'),
-                                  alignment=TA_CENTER, spaceAfter=2)
-    sub_style = ParagraphStyle('s', parent=styles['Normal'], fontSize=10,
-                               textColor=colors.HexColor('#475569'),
-                               alignment=TA_CENTER, spaceAfter=6)
-    story.append(Paragraph(school.get('name', 'STANVARD SCHOOL').upper(), header_style))
-    tag = f"{school.get('city', '')} · {school.get('address', '')}".strip(' ·')
-    story.append(Paragraph(tag or 'Excellence in Education', sub_style))
-    story.append(HRFlowable(width='100%', thickness=1.2,
-                            color=colors.HexColor('#0B2F4A'), spaceBefore=4, spaceAfter=10))
+    # Copy label banner (Office / Parent)
+    copy_style = ParagraphStyle('cp', parent=styles['Normal'], fontSize=7.5,
+                                textColor=colors.white, alignment=TA_CENTER,
+                                leading=9)
+    banner = Table([[Paragraph(f"<b>{copy_label}</b>", copy_style)]],
+                   colWidths=[130 * mm])
+    banner.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#0B2F4A')),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+    ]))
+    story.append(banner)
+    story.append(Spacer(1, 3))
 
-    title_style = ParagraphStyle('t', parent=styles['Heading2'], fontSize=13,
+    # School header
+    header_style = ParagraphStyle('h', parent=styles['Title'], fontSize=13,
+                                  textColor=colors.HexColor('#0B2F4A'),
+                                  alignment=TA_CENTER, leading=15, spaceAfter=0)
+    sub_style = ParagraphStyle('s', parent=styles['Normal'], fontSize=7.5,
+                               textColor=colors.HexColor('#475569'),
+                               alignment=TA_CENTER, leading=9, spaceAfter=2)
+    story.append(Paragraph(school.get('name', 'STANVARD SCHOOL').upper(), header_style))
+    tag_parts = []
+    if school.get('city'):
+        tag_parts.append(school['city'])
+    if school.get('phone'):
+        tag_parts.append(f"Ph: {school['phone']}")
+    tag = ' · '.join(tag_parts)
+    if tag:
+        story.append(Paragraph(tag, sub_style))
+    story.append(HRFlowable(width='100%', thickness=0.8,
+                            color=colors.HexColor('#0B2F4A'),
+                            spaceBefore=2, spaceAfter=4))
+
+    title_style = ParagraphStyle('t', parent=styles['Heading2'], fontSize=9.5,
                                  textColor=colors.HexColor('#1E40AF'),
-                                 alignment=TA_CENTER, spaceAfter=8)
+                                 alignment=TA_CENTER, leading=11, spaceAfter=4)
     story.append(Paragraph('FEE PAYMENT RECEIPT', title_style))
 
-    # Meta table
+    # Meta table (Receipt No, Date, Mode, Txn)
     paid_at = payment.get('paid_at', '')
     if paid_at:
         try:
@@ -95,49 +117,52 @@ def generate_receipt_pdf(payment: Dict[str, Any], school: Dict[str, Any], studen
     else:
         paid_at_display = ''
     meta = [
-        ['Receipt No:', payment.get('receipt_number', ''), 'Date:', paid_at_display],
-        ['Payment Mode:', str(payment.get('payment_mode', '')).replace('_', ' ').title(),
-         'Txn Ref:', payment.get('txn_ref') or payment.get('razorpay_payment_id') or '-'],
+        ['Receipt No:', payment.get('receipt_number', ''),
+         'Date:', paid_at_display],
+        ['Mode:', str(payment.get('payment_mode', '')).replace('_', ' ').title(),
+         'Ref:', payment.get('txn_ref') or payment.get('razorpay_payment_id') or '-'],
     ]
-    meta_tbl = Table(meta, colWidths=[30 * mm, 55 * mm, 22 * mm, 60 * mm])
+    meta_tbl = Table(meta, colWidths=[18 * mm, 42 * mm, 14 * mm, 56 * mm])
     meta_tbl.setStyle(TableStyle([
-        ('FONT', (0, 0), (-1, -1), 'Helvetica', 9),
-        ('FONT', (0, 0), (0, -1), 'Helvetica-Bold', 9),
-        ('FONT', (2, 0), (2, -1), 'Helvetica-Bold', 9),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('FONT', (0, 0), (-1, -1), 'Helvetica', 7.5),
+        ('FONT', (0, 0), (0, -1), 'Helvetica-Bold', 7.5),
+        ('FONT', (2, 0), (2, -1), 'Helvetica-Bold', 7.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('TOPPADDING', (0, 0), (-1, -1), 1),
     ]))
     story.append(meta_tbl)
-    story.append(Spacer(1, 8))
+    story.append(Spacer(1, 4))
 
     # Student details
     student_rows = [
-        ['Student Name:', student.get('full_name', ''),
-         'Admission No:', student.get('admission_number', '')],
-        ['Class:', f"{student.get('class_name', '') or ''} - {student.get('section', '') or ''}",
-         'Roll No:', student.get('roll_number', '') or '-'],
-        ['Father:', student.get('father_name', '') or '-',
-         'Contact:', student.get('phone', '') or '-'],
+        ['Student:', student.get('full_name', '') or '',
+         'Adm No:', student.get('admission_number', '') or ''],
+        ['Class:', f"{(student.get('class_name') or '')} - {(student.get('section') or '')}".strip(' -'),
+         'Roll:', student.get('roll_number') or '-'],
+        ['Father:', student.get('father_name') or '-',
+         'Contact:', student.get('phone') or '-'],
     ]
-    stu_tbl = Table(student_rows, colWidths=[30 * mm, 60 * mm, 25 * mm, 52 * mm])
+    stu_tbl = Table(student_rows, colWidths=[18 * mm, 42 * mm, 16 * mm, 54 * mm])
     stu_tbl.setStyle(TableStyle([
-        ('FONT', (0, 0), (-1, -1), 'Helvetica', 9),
-        ('FONT', (0, 0), (0, -1), 'Helvetica-Bold', 9),
-        ('FONT', (2, 0), (2, -1), 'Helvetica-Bold', 9),
+        ('FONT', (0, 0), (-1, -1), 'Helvetica', 7.5),
+        ('FONT', (0, 0), (0, -1), 'Helvetica-Bold', 7.5),
+        ('FONT', (2, 0), (2, -1), 'Helvetica-Bold', 7.5),
         ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#F1F5F9')),
-        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
-        ('INNERGRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#E2E8F0')),
-        ('LEFTPADDING', (0, 0), (-1, -1), 6),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-        ('TOPPADDING', (0, 0), (-1, -1), 5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('BOX', (0, 0), (-1, -1), 0.4, colors.HexColor('#CBD5E1')),
+        ('INNERGRID', (0, 0), (-1, -1), 0.2, colors.HexColor('#E2E8F0')),
+        ('LEFTPADDING', (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 0), (-1, -1), 3),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
     ]))
     story.append(stu_tbl)
-    story.append(Spacer(1, 12))
+    story.append(Spacer(1, 5))
 
     # Fee items
     fee_rows = [['#', 'Fee Head', 'Period', 'Amount (Rs.)']]
     for i, it in enumerate(payment.get('items', []), start=1):
-        fee_rows.append([str(i), it.get('fee_head_name', ''), it.get('period', ''),
+        fee_rows.append([str(i), it.get('fee_head_name', ''),
+                         it.get('period', '') or '-',
                          f"{it.get('amount', 0):,.2f}"])
     subtotal = payment.get('subtotal', 0.0)
     discount = payment.get('discount', 0.0)
@@ -150,53 +175,104 @@ def generate_receipt_pdf(payment: Dict[str, Any], school: Dict[str, Any], studen
         fee_rows.append(['', '', 'Discount', f"-{discount:,.2f}"])
     fee_rows.append(['', '', 'TOTAL PAID', f"{total:,.2f}"])
 
-    fee_tbl = Table(fee_rows, colWidths=[12 * mm, 78 * mm, 40 * mm, 40 * mm])
-    style_cmds = [
+    fee_tbl = Table(fee_rows, colWidths=[7 * mm, 55 * mm, 30 * mm, 38 * mm])
+    fee_tbl.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0B2F4A')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 9),
-        ('FONT', (0, 1), (-1, -1), 'Helvetica', 9),
+        ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 7.5),
+        ('FONT', (0, 1), (-1, -1), 'Helvetica', 7.5),
         ('ALIGN', (0, 0), (0, -1), 'CENTER'),
         ('ALIGN', (3, 0), (3, -1), 'RIGHT'),
         ('ALIGN', (2, 0), (2, -1), 'RIGHT'),
-        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#94A3B8')),
-        ('LINEABOVE', (0, len(fee_rows) - (2 + (1 if late_fee else 0) + (1 if discount else 0))),
-         (-1, len(fee_rows) - (2 + (1 if late_fee else 0) + (1 if discount else 0))),
-         0.5, colors.HexColor('#94A3B8')),
-        ('FONT', (2, -1), (-1, -1), 'Helvetica-Bold', 10),
+        ('BOX', (0, 0), (-1, -1), 0.4, colors.HexColor('#94A3B8')),
+        ('INNERGRID', (0, 0), (-1, -1), 0.15, colors.HexColor('#E2E8F0')),
+        ('FONT', (2, -1), (-1, -1), 'Helvetica-Bold', 8),
         ('BACKGROUND', (2, -1), (-1, -1), colors.HexColor('#DBEAFE')),
-        ('TOPPADDING', (0, 0), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-    ]
-    fee_tbl.setStyle(TableStyle(style_cmds))
+        ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 3),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+    ]))
     story.append(fee_tbl)
-    story.append(Spacer(1, 14))
+    story.append(Spacer(1, 5))
 
     story.append(Paragraph(
-        f"<b>Amount in Words:</b> {_num_to_words_inr(total)}",
-        ParagraphStyle('aw', parent=styles['Normal'], fontSize=9,
+        f"<b>In Words:</b> {_num_to_words_inr(total)}",
+        ParagraphStyle('aw', parent=styles['Normal'], fontSize=7.5, leading=9,
                        textColor=colors.HexColor('#0F172A'))
     ))
     if payment.get('remarks'):
-        story.append(Spacer(1, 6))
-        story.append(Paragraph(f"<b>Remarks:</b> {payment['remarks']}",
-                               ParagraphStyle('rm', parent=styles['Normal'], fontSize=9,
-                                              textColor=colors.HexColor('#475569'))))
-    story.append(Spacer(1, 18))
-    story.append(HRFlowable(width='100%', thickness=0.5,
-                            color=colors.HexColor('#CBD5E1'), spaceAfter=6))
+        story.append(Spacer(1, 2))
+        story.append(Paragraph(
+            f"<b>Remarks:</b> {payment['remarks']}",
+            ParagraphStyle('rm', parent=styles['Normal'], fontSize=7, leading=9,
+                           textColor=colors.HexColor('#475569'))))
+
+    story.append(Spacer(1, 8))
+    story.append(HRFlowable(width='100%', thickness=0.3,
+                            color=colors.HexColor('#CBD5E1'), spaceAfter=3))
     footer = Table([
-        ['This is a computer-generated receipt and does not require a signature.',
-         'Authorised Signatory']
-    ], colWidths=[110 * mm, 60 * mm])
+        ['Computer-generated receipt.', 'Authorised Signatory']
+    ], colWidths=[70 * mm, 60 * mm])
     footer.setStyle(TableStyle([
-        ('FONT', (0, 0), (-1, -1), 'Helvetica-Oblique', 8),
+        ('FONT', (0, 0), (-1, -1), 'Helvetica-Oblique', 6.5),
         ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#64748B')),
         ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
     ]))
     story.append(footer)
 
-    doc.build(story)
+    return story
+
+
+def generate_receipt_pdf(payment: Dict[str, Any], school: Dict[str, Any],
+                         student: Dict[str, Any]) -> bytes:
+    """Generate an A4-landscape PDF containing two side-by-side A5-sized copies
+    of the fee receipt: the LEFT half is the OFFICE COPY, the RIGHT half is the
+    PARENT COPY, with a dashed cut line between them.
+
+    The page is 297mm wide x 210mm tall (A4 landscape). Each half is roughly
+    A5-portrait sized (148mm x 210mm), which is the standard tear-off fee
+    receipt format used in Indian schools.
+    """
+    buffer = BytesIO()
+    page_size = landscape(A4)  # (297mm, 210mm) in points
+
+    doc = SimpleDocTemplate(
+        buffer, pagesize=page_size,
+        leftMargin=6 * mm, rightMargin=6 * mm,
+        topMargin=6 * mm, bottomMargin=6 * mm,
+        title=f"Fee Receipt - {payment.get('receipt_number', '')}"
+    )
+    styles = getSampleStyleSheet()
+
+    # Build the two copies as separate flowable lists
+    office_copy = _build_receipt_flowables(payment, school, student,
+                                            'OFFICE COPY', styles)
+    parent_copy = _build_receipt_flowables(payment, school, student,
+                                            'PARENT COPY', styles)
+
+    # Use KeepInFrame so any overflow shrinks gracefully within its cell.
+    left_cell = KeepInFrame(132 * mm, 190 * mm, office_copy, mode='shrink')
+    right_cell = KeepInFrame(132 * mm, 190 * mm, parent_copy, mode='shrink')
+
+    # Outer 2-column table with a dashed vertical cut-line between the halves.
+    outer = Table(
+        [[left_cell, right_cell]],
+        colWidths=[140 * mm, 140 * mm],
+        rowHeights=[192 * mm],
+    )
+    outer.setStyle(TableStyle([
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 3),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+        ('TOPPADDING', (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        # Dashed vertical cut-line between the two copies
+        ('LINEAFTER', (0, 0), (0, 0), 0.6, colors.HexColor('#94A3B8'),
+         None, [2, 2]),
+    ]))
+
+    doc.build([outer])
     buffer.seek(0)
     return buffer.getvalue()
 

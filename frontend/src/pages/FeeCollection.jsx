@@ -172,8 +172,10 @@ export default function FeeCollection() {
                 razorpay_signature: r.razorpay_signature,
               });
               toast.success(`Payment successful! Receipt: ${payment.receipt_number}`, {
-                action: { label: 'Download Receipt', onClick: () => openReceipt(payment.id) },
+                action: { label: 'Download Receipt', onClick: () => downloadReceipt(payment.id, payment.receipt_number) },
               });
+              // Auto-download the 2-up A4 landscape receipt for admin office + parent copy
+              downloadReceipt(payment.id, payment.receipt_number);
               resetForm();
             } catch (_e) { toast.error('Verification failed'); }
           },
@@ -182,9 +184,12 @@ export default function FeeCollection() {
         rzp.open();
       } else {
         const { data: payment } = await api.post('/payments/collect', payload);
-        toast.success(`Receipt ${payment.receipt_number} generated`, {
-          action: { label: 'View PDF', onClick: () => openReceipt(payment.id) },
+        toast.success(`Receipt ${payment.receipt_number} downloaded`, {
+          description: 'One page with Office copy + Parent copy (A4 landscape).',
+          action: { label: 'Re-download', onClick: () => downloadReceipt(payment.id, payment.receipt_number) },
         });
+        // Auto-download the 2-up A4 landscape receipt for admin office + parent copy
+        downloadReceipt(payment.id, payment.receipt_number);
         resetForm();
       }
     } catch (err) {
@@ -192,12 +197,28 @@ export default function FeeCollection() {
     } finally { setSaving(false); }
   };
 
-  const openReceipt = async (id) => {
-    const resp = await api.get(`/payments/${id}/receipt.pdf`, { responseType: 'blob' });
-    const blob = new Blob([resp.data], { type: 'application/pdf' });
-    const url = window.URL.createObjectURL(blob);
-    window.open(url, '_blank');
+  const downloadReceipt = async (id, receiptNumber) => {
+    try {
+      const resp = await api.get(`/payments/${id}/receipt.pdf`, { responseType: 'blob' });
+      const blob = new Blob([resp.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      // Trigger a download with a friendly filename.
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Receipt-${receiptNumber || id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Also open in a new tab so the admin can preview / print immediately.
+      window.open(url, '_blank');
+      // Revoke the object URL after some time to free memory.
+      setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+    } catch (_e) {
+      toast.error('Failed to download receipt PDF');
+    }
   };
+
+  const openReceipt = (id) => downloadReceipt(id);
 
   const resetForm = () => {
     setDiscount(0); setLateFee(0); setMode('cash'); setTxnRef(''); setRemarks('');
