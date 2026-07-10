@@ -13,6 +13,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   FileText, Download, FileSpreadsheet, Search, Filter, ChevronDown, X, Layers,
+  CheckCircle2, AlertTriangle, Circle, ListChecks,
 } from 'lucide-react';
 import { useSchool } from '@/contexts/SchoolContext';
 import { toast } from 'sonner';
@@ -46,12 +47,7 @@ export default function ReportsPage() {
   const [classes, setClasses] = useState([]);
   const [selections, setSelections] = useState([]); // [{class_id, class_name, section}]
   const [statusFilter, setStatusFilter] = useState('all');
-  const [behaviorFilter, setBehaviorFilter] = useState('all');
-  const [quickView, setQuickView] = useState('all'); // all|defaulters|fully_paid|upcoming
-  const [dueMin, setDueMin] = useState('');
-  const [dueMax, setDueMax] = useState('');
-  const [payStart, setPayStart] = useState('');
-  const [payEnd, setPayEnd] = useState('');
+  const [quickView, setQuickView] = useState('all'); // all|has_dues|fully_paid
   const [search, setSearch] = useState('');
   const [selectorOpen, setSelectorOpen] = useState(false);
   const [selectorSearch, setSelectorSearch] = useState('');
@@ -84,24 +80,15 @@ export default function ReportsPage() {
       const csParam = buildClassSectionsParam(selections);
       if (csParam) params.class_sections = csParam;
       if (statusFilter !== 'all') params.status_filter = statusFilter;
-      if (behaviorFilter !== 'all') params.behavior = behaviorFilter;
-      if (quickView !== 'all') params.quick_view = quickView;
-      if (dueMin !== '') params.due_min = dueMin;
-      if (dueMax !== '') params.due_max = dueMax;
-      if (payStart) params.payment_date_start = payStart;
-      if (payEnd) params.payment_date_end = payEnd;
+      // quick-view is applied client-side now (fully_paid / has_dues) so the
+      // report data always includes every student and month.
       const { data } = await api.get('/reports/fee-status', { params });
       setFeeStatusData(data);
     } finally { setLoading(false); }
-  }, [selections, statusFilter, behaviorFilter, quickView, dueMin, dueMax, payStart, payEnd]);
+  }, [selections, statusFilter]);
 
   useEffect(() => { loadClasses(); }, [loadClasses]);
   useEffect(() => { if (activeSchoolId) { runCollection(); runFeeStatus(); } }, [activeSchoolId, runCollection, runFeeStatus]);
-  // Re-run fee-status automatically when quick-view chip changes
-  useEffect(() => {
-    if (activeSchoolId) runFeeStatus();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quickView]);
   useEffect(() => {
     const h = () => {
       loadClasses();
@@ -165,13 +152,6 @@ export default function ReportsPage() {
       const csParam = buildClassSectionsParam(selections);
       if (csParam) params.class_sections = csParam;
       if (statusFilter !== 'all') params.status_filter = statusFilter;
-      if (behaviorFilter !== 'all') params.behavior = behaviorFilter;
-      if (quickView !== 'all') params.quick_view = quickView;
-      if (dueMin !== '') params.due_min = dueMin;
-      if (dueMax !== '') params.due_max = dueMax;
-      if (payStart) params.payment_date_start = payStart;
-      if (payEnd) params.payment_date_end = payEnd;
-      // Override quick view for "Defaulters export" shortcut
       if (opts.overrideQuick) params.quick_view = opts.overrideQuick;
       const resp = await api.get(`/reports/fee-status.${ext}`, { params, responseType: 'blob' });
       const mime = ext === 'pdf' ? 'application/pdf'
@@ -189,12 +169,35 @@ export default function ReportsPage() {
         a.click();
         a.remove();
       }
-      toast.success(`Downloaded ${ext.toUpperCase()}${opts.overrideQuick ? ' (defaulters)' : ''}`);
+      toast.success(`Downloaded ${ext.toUpperCase()}`);
     } catch (err) {
       toast.error(`Failed to download ${ext.toUpperCase()}: ${err?.response?.data?.detail || err.message}`);
     } finally {
       setDlLoading(false);
     }
+  };
+
+  // Download the Monthly Due List — respects current class/section selections.
+  const dlDueList = async () => {
+    setDlLoading(true);
+    try {
+      const params = { only_with_dues: true };
+      const csParam = buildClassSectionsParam(selections);
+      if (csParam) params.class_sections = csParam;
+      const resp = await api.get('/reports/monthly-dues.xlsx', { params, responseType: 'blob' });
+      const blob = new Blob([resp.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = selections.length === 0 ? 'due_list_all_classes.xlsx' : 'due_list.xlsx';
+      a.click(); a.remove();
+      setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+      toast.success('Due list downloaded');
+    } catch (err) {
+      toast.error(`Failed to download due list: ${err?.response?.data?.detail || err.message}`);
+    } finally { setDlLoading(false); }
   };
 
   const dl = async (ext) => {
@@ -211,6 +214,8 @@ export default function ReportsPage() {
 
   const searchQ = search.toLowerCase();
   const filteredRows = (feeStatusData?.rows || []).filter((r) => {
+    if (quickView === 'has_dues' && (r.due || 0) <= 0) return false;
+    if (quickView === 'fully_paid' && !r.fully_paid) return false;
     if (!search) return true;
     return (r.full_name || '').toLowerCase().includes(searchQ) || (r.admission_number || '').toLowerCase().includes(searchQ);
   });
@@ -438,43 +443,6 @@ export default function ReportsPage() {
               </div>
             </div>
 
-            {/* Advanced filters row */}
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mt-3 pt-3 border-t border-border">
-              <div className="grid gap-1.5">
-                <Label className="text-xs">Behavior</Label>
-                <Select value={behaviorFilter} onValueChange={setBehaviorFilter}>
-                  <SelectTrigger data-testid="report-behavior-filter"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="regular">Regular</SelectItem>
-                    <SelectItem value="late">Late</SelectItem>
-                    <SelectItem value="defaulter">Defaulter</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-1.5">
-                <Label className="text-xs">Due ≥ ₹</Label>
-                <Input type="number" value={dueMin} onChange={(e) => setDueMin(e.target.value)} placeholder="Min" data-testid="report-due-min" />
-              </div>
-              <div className="grid gap-1.5">
-                <Label className="text-xs">Due ≤ ₹</Label>
-                <Input type="number" value={dueMax} onChange={(e) => setDueMax(e.target.value)} placeholder="Max" data-testid="report-due-max" />
-              </div>
-              <div className="grid gap-1.5">
-                <Label className="text-xs">Last Paid ≥</Label>
-                <Input type="date" value={payStart} onChange={(e) => setPayStart(e.target.value)} data-testid="report-pay-start" />
-              </div>
-              <div className="grid gap-1.5">
-                <Label className="text-xs">Last Paid ≤</Label>
-                <Input type="date" value={payEnd} onChange={(e) => setPayEnd(e.target.value)} data-testid="report-pay-end" />
-              </div>
-              <div className="flex items-end">
-                <Button variant="outline" className="w-full" onClick={() => {
-                  setBehaviorFilter('all'); setDueMin(''); setDueMax(''); setPayStart(''); setPayEnd(''); setQuickView('all');
-                }} data-testid="report-clear-filters">Clear all</Button>
-              </div>
-            </div>
-
             {/* Selected chips */}
             {selections.length > 0 && (
               <div className="mt-3 pt-3 border-t border-border">
@@ -498,6 +466,12 @@ export default function ReportsPage() {
                       </button>
                     </Badge>
                   ))}
+                  <button
+                    onClick={clearSelections}
+                    className="text-[11px] text-muted-foreground hover:text-foreground underline underline-offset-2 ml-1"
+                  >
+                    clear
+                  </button>
                 </div>
               </div>
             )}
@@ -508,7 +482,16 @@ export default function ReportsPage() {
                 Showing: <b>{selectionSummary}</b>
                 {statusFilter !== 'all' && <> · Status: <b className="capitalize">{statusFilter}</b></>}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  size="sm"
+                  onClick={dlDueList}
+                  disabled={dlLoading || loading}
+                  className="gap-1 bg-[hsl(var(--primary))] hover:bg-[hsl(var(--primary))]/90"
+                  data-testid="dl-due-list"
+                >
+                  <ListChecks className="h-3.5 w-3.5" /> Export Due List (XLSX)
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -559,11 +542,14 @@ export default function ReportsPage() {
                 <Card className="p-3 border-border bg-[#E6F6F4]" data-testid="fs-card-paid">
                   <div className="text-xs uppercase text-[#0F766E]">Paid</div>
                   <div className="h-font text-lg font-semibold tabular-nums">{shortMoney(feeStatusData.summary.total_paid)}</div>
+                  <div className="text-[10px] text-[#0F766E]/80">Fully paid: {feeStatusData.summary.fully_paid_count || 0}</div>
                 </Card>
                 <Card className="p-3 border-border bg-[#FEE4E2]" data-testid="fs-card-due">
                   <div className="text-xs uppercase text-[#B42318]">Due</div>
                   <div className="h-font text-lg font-semibold tabular-nums">{shortMoney(feeStatusData.summary.total_due)}</div>
-                  <div className="text-[10px] text-[#B42318]/80">= Expected − Paid</div>
+                  <div className="text-[10px] text-[#B42318]/80">
+                    {feeStatusData.summary.students_with_dues || 0} students · overdue {shortMoney(feeStatusData.summary.total_overdue_amount || 0)}
+                  </div>
                 </Card>
                 <Card className="p-3 border-border" data-testid="fs-card-collection">
                   <div className="text-xs uppercase text-muted-foreground">Collection %</div>
@@ -574,14 +560,13 @@ export default function ReportsPage() {
                 </Card>
               </div>
 
-              {/* Quick views */}
-              <div className="flex flex-wrap items-center gap-1.5 mb-4">
-                <span className="text-xs text-muted-foreground mr-1">Quick views:</span>
+              {/* Quick views & legend */}
+              <div className="flex flex-wrap items-center gap-1.5 mb-3">
+                <span className="text-xs text-muted-foreground mr-1">Show:</span>
                 {[
-                  { v: 'all', label: 'All students' },
-                  { v: 'defaulters', label: `Defaulters (${feeStatusData.summary.defaulter_count})` },
-                  { v: 'fully_paid', label: `Fully paid (${feeStatusData.summary.paid_count})` },
-                  { v: 'upcoming', label: `Upcoming dues (${feeStatusData.summary.upcoming_count})` },
+                  { v: 'all', label: `All students (${feeStatusData.count})` },
+                  { v: 'has_dues', label: `Has dues (${feeStatusData.summary.students_with_dues || 0})` },
+                  { v: 'fully_paid', label: `Fully paid (${feeStatusData.summary.fully_paid_count || 0})` },
                 ].map((q) => (
                   <button
                     key={q.v}
@@ -597,21 +582,14 @@ export default function ReportsPage() {
                     {q.label}
                   </button>
                 ))}
-                <div className="mx-2 h-4 w-px bg-border" />
-                <Button size="sm" variant="outline" className="gap-1 h-7"
-                  onClick={() => dlFeeStatus('xlsx', { overrideQuick: 'defaulters', filename: 'defaulters.xlsx' })}
-                  data-testid="dl-defaulters"
-                  disabled={dlLoading || loading}
-                >
-                  <FileSpreadsheet className="h-3 w-3" /> Export Defaulters
-                </Button>
-                <Button size="sm" variant="outline" className="gap-1 h-7"
-                  onClick={() => dlFeeStatus('xlsx', { filename: 'fee_status_by_class.xlsx' })}
-                  data-testid="dl-classwise"
-                  disabled={dlLoading || loading}
-                >
-                  <FileSpreadsheet className="h-3 w-3" /> Class-wise XLSX
-                </Button>
+              </div>
+              <div className="flex flex-wrap items-center gap-3 mb-4 text-[11px]">
+                <span className="text-muted-foreground">Legend:</span>
+                <LegendSwatch cls="bg-[#0F766E] text-white" label="Fully paid (all months)" />
+                <LegendSwatch cls="bg-[#A7F3D0] text-[#065F46]" label="Month paid" />
+                <LegendSwatch cls="bg-[#FDE68A] text-[#92400E]" label="Partial" />
+                <LegendSwatch cls="bg-[#FCA5A5] text-[#B42318]" label="Overdue / Due" />
+                <LegendSwatch cls="bg-slate-100 text-slate-500 border border-slate-200" label="Upcoming" />
               </div>
 
               {/* Class/Section rollup */}
@@ -630,8 +608,7 @@ export default function ReportsPage() {
                         <TableHead className="text-right">Paid</TableHead>
                         <TableHead className="text-right">Due</TableHead>
                         <TableHead className="text-right">Coll %</TableHead>
-                        <TableHead className="text-right">Paid/Pt/U</TableHead>
-                        <TableHead className="text-right">Defaulters</TableHead>
+                        <TableHead className="text-right">Fully / With Dues</TableHead>
                       </TableRow></TableHeader>
                       <TableBody>
                         {feeStatusData.by_class.map((b) => (
@@ -641,10 +618,13 @@ export default function ReportsPage() {
                             <TableCell className="text-right tabular-nums">{b.students}</TableCell>
                             <TableCell className="text-right tabular-nums">{money(b.expected)}</TableCell>
                             <TableCell className="text-right tabular-nums text-emerald-700">{money(b.paid)}</TableCell>
-                            <TableCell className="text-right tabular-nums text-[#B42318]">{money(b.due)}</TableCell>
+                            <TableCell className="text-right tabular-nums text-[#B42318] font-medium">{money(b.due)}</TableCell>
                             <TableCell className="text-right tabular-nums">{b.collection_percent}%</TableCell>
-                            <TableCell className="text-right text-xs">{b.paid_count}/{b.partial_count}/{b.unpaid_count}</TableCell>
-                            <TableCell className="text-right tabular-nums font-medium">{b.defaulters || 0}</TableCell>
+                            <TableCell className="text-right text-xs">
+                              <span className="text-[#0F766E] font-medium">{b.fully_paid_count || 0}</span>
+                              {' / '}
+                              <span className="text-[#B42318] font-medium">{b.students_with_dues || 0}</span>
+                            </TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -653,61 +633,48 @@ export default function ReportsPage() {
                 </Card>
               )}
 
-              {/* Student table */}
+              {/* Student table — MONTHLY VIEW */}
               <Card className="border-border overflow-hidden" data-testid="report-fee-status-table">
                 <div className="px-4 py-2 border-b border-border bg-secondary/60 text-xs font-medium flex items-center justify-between">
-                  <span>Students ({filteredRows.length})</span>
+                  <span>Students ({filteredRows.length}) — {feeStatusData.academic_session || ''}</span>
+                  <span className="text-[10px] text-muted-foreground hidden md:inline">Hover a month cell for details</span>
                 </div>
                 <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader><TableRow>
-                      <TableHead>Student</TableHead>
-                      <TableHead>Class</TableHead>
-                      <TableHead className="text-right">Expected</TableHead>
-                      <TableHead className="text-right">Paid</TableHead>
-                      <TableHead className="text-right">Due</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Last Payment</TableHead>
-                      <TableHead className="text-right">Overdue Days</TableHead>
-                      <TableHead>Behavior</TableHead>
-                    </TableRow></TableHeader>
+                  <Table className="min-w-[1100px]">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="sticky left-0 bg-secondary/60 z-10 min-w-[180px]">Student</TableHead>
+                        <TableHead className="min-w-[80px]">Class</TableHead>
+                        {(feeStatusData.rows?.[0]?.monthly_status || []).map((m) => (
+                          <TableHead key={m.i} className="text-center px-1 text-[11px]">
+                            {(m.label || '').split(' ')[0].slice(0, 3)}
+                          </TableHead>
+                        ))}
+                        <TableHead className="text-right whitespace-nowrap">Total Due</TableHead>
+                      </TableRow>
+                    </TableHeader>
                     <TableBody>
                       {filteredRows.length === 0 && (
-                        <TableRow><TableCell colSpan={9} className="py-8 text-center text-muted-foreground text-sm">
+                        <TableRow><TableCell colSpan={16} className="py-8 text-center text-muted-foreground text-sm">
                           No students match filters.
                         </TableCell></TableRow>
                       )}
                       {filteredRows.slice(0, 500).map((r) => (
-                        <TableRow key={r.student_id} className="hover:bg-secondary/40">
-                          <TableCell>
-                            <div className="font-medium">{r.full_name}</div>
-                            <div className="text-xs text-muted-foreground font-mono">{r.admission_number}</div>
+                        <TableRow key={r.student_id} className="hover:bg-secondary/40" data-testid={`fs-row-${r.student_id}`}>
+                          <TableCell className="sticky left-0 bg-card z-10">
+                            <div className="font-medium leading-tight">{r.full_name}</div>
+                            <div className="text-[11px] text-muted-foreground font-mono">{r.admission_number}</div>
                           </TableCell>
-                          <TableCell>{r.class_name}{r.section ? ` · ${r.section}` : ''}</TableCell>
-                          <TableCell className="text-right tabular-nums">{money(r.expected)}</TableCell>
-                          <TableCell className="text-right tabular-nums font-medium">{money(r.paid)}</TableCell>
-                          <TableCell className="text-right tabular-nums font-semibold text-[#B42318]">{money(r.due)}</TableCell>
-                          <TableCell>
-                            <Badge className={r.status === 'paid'
-                              ? 'bg-[#E6F6F4] text-[#0F766E] border border-[#BFEAE6]'
-                              : r.status === 'partial'
-                                ? 'bg-[#FFF3E0] text-[#B45309] border border-[#FFD7A8]'
-                                : 'bg-[#FEE4E2] text-[#B42318] border border-[#FECACA]'}>{r.status}</Badge>
+                          <TableCell className="whitespace-nowrap text-xs">
+                            {r.class_name}{r.section ? `·${r.section}` : ''}
                           </TableCell>
-                          <TableCell className="text-xs">{r.last_payment_date || '—'}</TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {r.overdue_days > 0 ? (
-                              <span className="text-[#B42318] font-medium">{r.overdue_days}d</span>
-                            ) : (r.upcoming_due_date ? <span className="text-xs text-muted-foreground">due {r.upcoming_due_date}</span> : '—')}
-                          </TableCell>
-                          <TableCell>
-                            <Badge className={r.behavior_tag === 'regular'
-                              ? 'bg-[#E6F6F4] text-[#0F766E] border border-[#BFEAE6]'
-                              : r.behavior_tag === 'late'
-                                ? 'bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A]'
-                                : r.behavior_tag === 'defaulter'
-                                  ? 'bg-[#FEE4E2] text-[#B42318] border border-[#FECACA]'
-                                  : 'bg-muted text-foreground'}>{r.behavior_tag}</Badge>
+                          {(r.monthly_status || []).map((m) => (
+                            <TableCell key={m.i} className="p-0.5 text-center">
+                              <MonthCell m={m} fullyPaid={r.fully_paid} monthlyAmount={r.monthly_amount} />
+                            </TableCell>
+                          ))}
+                          <TableCell className={`text-right tabular-nums font-semibold whitespace-nowrap ${r.due > 0 ? 'text-[#B42318]' : 'text-[#0F766E]'}`}>
+                            {r.due > 0 ? money(r.due) : '✓'}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -725,5 +692,44 @@ export default function ReportsPage() {
         </TabsContent>
       </Tabs>
     </AppShell>
+  );
+}
+
+// ---- Monthly status cell used inside the fee-status table ----
+function MonthCell({ m, fullyPaid, monthlyAmount }) {
+  const isFullyPaid = fullyPaid && m.status === 'paid';
+  const cls = isFullyPaid
+    ? 'bg-[#0F766E] text-white border-[#0F766E]'
+    : m.status === 'paid'
+      ? 'bg-[#A7F3D0] text-[#065F46] border-[#6EE7B7]'
+      : m.status === 'partial'
+        ? 'bg-[#FDE68A] text-[#92400E] border-[#FCD34D]'
+        : m.status === 'overdue'
+          ? 'bg-[#FCA5A5] text-[#B42318] border-[#F87171]'
+          : 'bg-slate-100 text-slate-500 border-slate-200';
+  const icon = isFullyPaid ? <CheckCircle2 className="h-3.5 w-3.5" />
+    : m.status === 'paid' ? <CheckCircle2 className="h-3.5 w-3.5" />
+    : m.status === 'overdue' ? <AlertTriangle className="h-3.5 w-3.5" />
+    : m.status === 'partial' ? <Circle className="h-3.5 w-3.5" />
+    : <Circle className="h-3.5 w-3.5 opacity-40" />;
+  const dueRs = Math.max(Math.round((monthlyAmount || 0) - (m.paid || 0)), 0);
+  const title = `${m.label}\nStatus: ${m.status}\nPaid: ₹${(m.paid || 0).toLocaleString('en-IN')}` +
+    ((m.status === 'overdue' || m.status === 'partial') ? `\nDue: ₹${dueRs.toLocaleString('en-IN')}` : '');
+  return (
+    <div
+      title={title}
+      className={`w-8 h-8 mx-auto rounded-md border flex items-center justify-center text-[10px] font-medium ${cls}`}
+    >
+      {icon}
+    </div>
+  );
+}
+
+function LegendSwatch({ cls, label }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={`inline-block h-3.5 w-3.5 rounded ${cls}`} />
+      <span className="text-muted-foreground">{label}</span>
+    </span>
   );
 }

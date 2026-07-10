@@ -598,6 +598,73 @@ def _session_months(session: str) -> list:
     return out
 
 
+def _build_month_schedule(net_annual: float, payments: list, session: str,
+                          today: Optional[datetime] = None) -> tuple:
+    """Compute the 12-month schedule for a student given their net annual fee
+    liability and the list of *success* payments. Returns
+    (schedule, monthly_amount, fully_paid, overdue_count, overdue_amount, due_amount).
+
+    - Explicit line-item `period` labels (e.g. "April 2026") mark those months as paid.
+    - Remaining paid amount is absorbed FIFO across the still-pending months.
+    - Months whose (year, month) is strictly before the current month AND still
+      unpaid/partial are flagged `overdue`.
+    """
+    monthly_amount = round(net_annual / 12.0, 2) if net_annual > 0 else 0.0
+    total_paid = sum(float(p.get('total_paid') or 0) for p in payments)
+
+    explicit_paid_labels = set()
+    for p in payments:
+        for it in (p.get('items') or []):
+            per = (it.get('period') or '').strip()
+            if per:
+                explicit_paid_labels.add(per)
+
+    months = _session_months(session)
+    schedule = []
+    explicit_absorbed = 0.0
+    for m in months:
+        entry = {
+            'index': m['index'], 'label': m['label'],
+            'month': m['month'], 'year': m['year'],
+            'amount': monthly_amount, 'paid_amount': 0.0, 'status': 'pending',
+        }
+        if m['label'] in explicit_paid_labels:
+            entry['status'] = 'paid'
+            entry['paid_amount'] = monthly_amount
+            explicit_absorbed += monthly_amount
+        schedule.append(entry)
+
+    remaining = max(total_paid - explicit_absorbed, 0.0)
+    for entry in schedule:
+        if entry['status'] == 'paid':
+            continue
+        if remaining <= 0:
+            break
+        if remaining >= monthly_amount - 0.01:
+            entry['status'] = 'paid'
+            entry['paid_amount'] = monthly_amount
+            remaining -= monthly_amount
+        else:
+            entry['status'] = 'partial'
+            entry['paid_amount'] = round(remaining, 2)
+            remaining = 0
+
+    today = today or datetime.now()
+    overdue_count = 0
+    overdue_amount = 0.0
+    for entry in schedule:
+        if entry['status'] in ('pending', 'partial'):
+            if (entry['year'], entry['month']) < (today.year, today.month):
+                if entry['status'] == 'pending':
+                    entry['status'] = 'overdue'
+                overdue_count += 1
+                overdue_amount += max(monthly_amount - entry['paid_amount'], 0.0)
+
+    fully_paid = net_annual > 0 and all(e['status'] == 'paid' for e in schedule)
+    due_amount = round(max(net_annual - total_paid, 0.0), 2)
+    return schedule, monthly_amount, fully_paid, overdue_count, round(overdue_amount, 2), due_amount
+
+
 @api.get('/fees/student/{student_id}/fee-schedule')
 async def student_fee_schedule(student_id: str, request: Request, current=Depends(get_current_user)):
     """Return a monthly & annual view of the student's fee liability for the
@@ -639,61 +706,15 @@ async def student_fee_schedule(student_id: str, request: Request, current=Depend
 
     # Effective yearly (net of concession)
     net_annual = max(annual_total - plan_discount_amount, 0.0)
-    monthly_amount = round(net_annual / 12.0, 2) if net_annual > 0 else 0.0
 
     # Payments so far
     payments = await payments_col.find({'student_id': student_id, 'status': 'success'}, {'_id': 0}).to_list(500)
     total_paid = sum(float(p.get('total_paid') or 0) for p in payments)
 
-    # Build 12-month schedule and mark paid months by FIFO against total_paid,
-    # but also promote months that were EXPLICITLY tagged in a prior payment's
-    # line-item period (e.g. "April 2026") so parents can see exact months.
-    explicit_paid_labels = set()
-    for p in payments:
-        for it in (p.get('items') or []):
-            per = (it.get('period') or '').strip()
-            if per:
-                explicit_paid_labels.add(per)
-
-    months = _session_months(session)
-    # First, mark explicit months as paid.
-    remaining_to_absorb = total_paid
-    schedule = []
-    explicit_amount_absorbed = 0.0
-    for m in months:
-        entry = {
-            'index': m['index'], 'label': m['label'], 'month': m['month'], 'year': m['year'],
-            'amount': monthly_amount, 'paid_amount': 0.0, 'status': 'pending',
-        }
-        if m['label'] in explicit_paid_labels:
-            entry['status'] = 'paid'
-            entry['paid_amount'] = monthly_amount
-            explicit_amount_absorbed += monthly_amount
-        schedule.append(entry)
-
-    # Absorb remaining paid amount over the not-yet-paid months in order (FIFO).
-    remaining_to_absorb = max(total_paid - explicit_amount_absorbed, 0.0)
-    for entry in schedule:
-        if entry['status'] == 'paid':
-            continue
-        if remaining_to_absorb <= 0:
-            break
-        if remaining_to_absorb >= monthly_amount - 0.01:
-            entry['status'] = 'paid'
-            entry['paid_amount'] = monthly_amount
-            remaining_to_absorb -= monthly_amount
-        else:
-            entry['status'] = 'partial'
-            entry['paid_amount'] = round(remaining_to_absorb, 2)
-            remaining_to_absorb = 0
-
-    # Mark overdue months (past current month, still pending)
-    today = datetime.now()
-    for entry in schedule:
-        if entry['status'] in ('pending', 'partial'):
-            # An overdue month is one whose (year, month) is strictly before current
-            if (entry['year'], entry['month']) < (today.year, today.month):
-                entry['status'] = 'overdue' if entry['status'] == 'pending' else entry['status']
+    # Build 12-month schedule (shared helper)
+    schedule, monthly_amount, _fully_paid, _oc, _oa, _due = _build_month_schedule(
+        net_annual, payments, session
+    )
 
     remaining_balance = max(net_annual - total_paid, 0.0)
     # Pay Full discount — apply annual_discount_percent on the REMAINING amount
@@ -1866,6 +1887,21 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
         if dd and pd and pd > dd:
             late_flag_by_stu[sid_] = True
 
+    # For monthly schedule computation we need per-student payments grouped
+    payments_by_stu: Dict[str, list] = {}
+    for p in payments:
+        payments_by_stu.setdefault(p['student_id'], []).append(p)
+
+    # Determine the current academic session — pick the most common one across
+    # student assignments (fall back to 2026-27 if none).
+    session_counts: Dict[str, int] = {}
+    for a in assignments:
+        s = a.get('academic_session')
+        if s:
+            session_counts[s] = session_counts.get(s, 0) + 1
+    current_session = max(session_counts, key=session_counts.get) if session_counts else '2026-27'
+    today_dt = datetime.now()
+
     today = datetime.now().date().isoformat()
 
     def _behavior_tag(paid: float, due: float, overdue_days: int, was_late: bool, expected: float) -> str:
@@ -1947,6 +1983,23 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
             'behavior_tag': behavior_tag,
         })
 
+    # ---- Compute monthly schedule for every student in the filtered result ----
+    for r in rows:
+        sid_ = r['student_id']
+        sched, monthly_amt, fully_paid, oc, oa, _due = _build_month_schedule(
+            r['expected'], payments_by_stu.get(sid_, []), current_session, today_dt,
+        )
+        # Compact month tokens: only the fields the UI needs.
+        r['monthly_amount'] = monthly_amt
+        r['monthly_status'] = [
+            {'i': e['index'], 'label': e['label'], 'status': e['status'],
+             'paid': round(e['paid_amount'], 2), 'due': round(max(monthly_amt - e['paid_amount'], 0), 2)}
+            for e in sched
+        ]
+        r['fully_paid'] = fully_paid
+        r['overdue_months'] = oc
+        r['overdue_amount'] = oa
+
     total_expected = sum(r['expected'] for r in rows)
     total_paid = sum(r['paid'] for r in rows)
     total_due = sum(r['due'] for r in rows)
@@ -1954,7 +2007,7 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
     total_gross = sum(r['gross_expected'] for r in rows)
     collection_pct = round((total_paid / total_expected) * 100, 1) if total_expected > 0 else 0.0
 
-    # Class/Section rollups
+    # Class/Section rollups — monthly-status oriented
     by_class_map: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         key = f"{r['class_id']}::{r.get('section') or '-'}"
@@ -1962,23 +2015,30 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
             'class_id': r['class_id'], 'class_name': r['class_name'],
             'section': r.get('section') or '-',
             'students': 0, 'expected': 0.0, 'paid': 0.0, 'due': 0.0,
-            'paid_count': 0, 'partial_count': 0, 'unpaid_count': 0, 'defaulters': 0,
+            'paid_count': 0, 'partial_count': 0, 'unpaid_count': 0,
+            'fully_paid_count': 0, 'students_with_dues': 0,
+            'overdue_amount': 0.0,
         })
         b['students'] += 1
         b['expected'] += r['expected']
         b['paid'] += r['paid']
         b['due'] += r['due']
         b[f"{r['status']}_count"] += 1
-        if r['behavior_tag'] == 'defaulter':
-            b['defaulters'] += 1
+        if r.get('fully_paid'):
+            b['fully_paid_count'] += 1
+        if r['due'] > 0:
+            b['students_with_dues'] += 1
+        b['overdue_amount'] += r.get('overdue_amount', 0.0)
     by_class = sorted(by_class_map.values(), key=lambda x: (x['class_name'], x['section']))
     for b in by_class:
         b['collection_percent'] = round((b['paid'] / b['expected']) * 100, 1) if b['expected'] > 0 else 0.0
+        b['overdue_amount'] = round(b['overdue_amount'], 2)
 
     return {
         'rows': rows,
         'count': len(rows),
         'by_class': by_class,
+        'academic_session': current_session,
         'summary': {
             'total_expected': total_expected,
             'total_gross_expected': total_gross,
@@ -1989,6 +2049,9 @@ async def report_fee_status(request: Request, current=Depends(get_current_user),
             'paid_count': sum(1 for r in rows if r['status'] == 'paid'),
             'partial_count': sum(1 for r in rows if r['status'] == 'partial'),
             'unpaid_count': sum(1 for r in rows if r['status'] == 'unpaid'),
+            'fully_paid_count': sum(1 for r in rows if r.get('fully_paid')),
+            'students_with_dues': sum(1 for r in rows if r['due'] > 0),
+            'total_overdue_amount': round(sum(r.get('overdue_amount', 0) for r in rows), 2),
             'defaulter_count': sum(1 for r in rows if r['behavior_tag'] == 'defaulter'),
             'late_count': sum(1 for r in rows if r['behavior_tag'] == 'late'),
             'regular_count': sum(1 for r in rows if r['behavior_tag'] == 'regular'),
@@ -2023,6 +2086,168 @@ def _fee_status_row_to_list(r: Dict[str, Any]) -> List[Any]:
         (r.get('status') or '').title(),
         (r.get('behavior_tag') or 'na').title(),
     ]
+
+
+@api.get('/reports/monthly-dues.xlsx',
+         dependencies=[Depends(require_roles('super_admin', 'school_admin', 'accountant'))])
+async def report_monthly_dues_xlsx(request: Request,
+                                   current=Depends(get_current_user),
+                                   school_id: Optional[str] = None,
+                                   class_sections: Optional[str] = None,
+                                   only_with_dues: bool = True):
+    """Export a **Due List** — for each student in the selected classes, list
+    monthly-fee status (paid / partial / overdue / upcoming) across all 12
+    months of the academic session, along with total due amount and
+    student/guardian contact details. Ideal for classroom-level follow-ups.
+
+    Query params:
+      - `class_sections`: comma-separated `class_id:section` pairs (blank
+        section = all sections). Omit to export all classes.
+      - `only_with_dues` (default True): if True, only students who currently
+        have Due > 0 are exported.
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    data = await report_fee_status(request, current, school_id, None, None,
+                                   class_sections, None, None, None, None,
+                                   None, None, None)
+    sid = resolve_school_id(current, school_id, request.headers.get('X-School-Id'))
+    school = await schools_col.find_one({'id': sid}, {'_id': 0}) or {}
+
+    rows = data['rows']
+    if only_with_dues:
+        rows = [r for r in rows if (r.get('due') or 0) > 0]
+    # Sort by class → section → name for easy classroom distribution
+    rows.sort(key=lambda r: (r.get('class_name') or '', r.get('section') or '',
+                             r.get('full_name') or ''))
+
+    # Month headers (short form: Apr, May, ...)
+    month_short = []
+    if rows:
+        for m in rows[0].get('monthly_status') or []:
+            lbl = m.get('label') or ''
+            month_short.append(lbl.split(' ')[0][:3] if lbl else '')
+    if not month_short:
+        month_short = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep',
+                       'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar']
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Due List'
+
+    # Title & meta
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8 + len(month_short))
+    t = ws.cell(row=1, column=1, value=f"{school.get('name', 'Stanvard School')} — Fee Due List")
+    t.font = Font(bold=True, size=14, color='0B2F4A')
+    t.alignment = Alignment(horizontal='center')
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=8 + len(month_short))
+    m = ws.cell(row=2, column=1,
+                value=f"Session {data.get('academic_session', '')} · {len(rows)} student(s) · "
+                      f"Total due: Rs. {sum(r.get('due', 0) for r in rows):,.2f} · "
+                      f"Generated on {datetime.now().strftime('%d %b %Y, %H:%M')}")
+    m.font = Font(size=10, color='475569')
+    m.alignment = Alignment(horizontal='center')
+
+    header = ['Admission No', 'Student Name', 'Class', 'Section',
+              'Guardian', 'Contact', 'Monthly (Rs.)'] + month_short + ['Total Due (Rs.)']
+    ws.append([])  # blank row
+    ws.append(header)
+    header_row_idx = ws.max_row
+    header_font = Font(bold=True, color='FFFFFF', size=10)
+    header_fill = PatternFill('solid', fgColor='0B2F4A')
+    for col_idx in range(1, len(header) + 1):
+        c = ws.cell(row=header_row_idx, column=col_idx)
+        c.font = header_font
+        c.fill = header_fill
+        c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
+    # Color palette
+    fills = {
+        'paid_full':   PatternFill('solid', fgColor='0F766E'),   # deep green — fully paid
+        'paid':        PatternFill('solid', fgColor='A7F3D0'),   # light green — that month paid
+        'partial':     PatternFill('solid', fgColor='FDE68A'),   # amber
+        'overdue':     PatternFill('solid', fgColor='FCA5A5'),   # red
+        'pending':     PatternFill('solid', fgColor='F1F5F9'),   # grey
+    }
+    thin = Side(border_style='thin', color='CBD5E1')
+    cell_border = Border(top=thin, bottom=thin, left=thin, right=thin)
+
+    for r in rows:
+        ws.append([
+            r.get('admission_number') or '',
+            r.get('full_name') or '',
+            r.get('class_name') or '',
+            r.get('section') or '',
+            r.get('father_name') or '',
+            r.get('phone') or '',
+            round(r.get('monthly_amount') or 0, 2),
+        ] + [
+            # Cell text: '✓' for paid, amount for partial/overdue, blank for pending
+            (
+                '✓' if m['status'] == 'paid' else
+                round(m['due'], 0) if m['status'] in ('overdue', 'partial') else
+                ''
+            )
+            for m in (r.get('monthly_status') or [])
+        ] + [round(r.get('due') or 0, 2)])
+
+        row_idx = ws.max_row
+        # Colour the month cells
+        for j, m in enumerate((r.get('monthly_status') or [])):
+            cell = ws.cell(row=row_idx, column=8 + j)  # 7 leading cols + 1 (1-indexed)
+            key = 'paid_full' if r.get('fully_paid') and m['status'] == 'paid' else m['status']
+            cell.fill = fills.get(key, fills['pending'])
+            cell.alignment = Alignment(horizontal='center')
+            if key == 'paid_full':
+                cell.font = Font(bold=True, color='FFFFFF')
+            elif m['status'] == 'overdue':
+                cell.font = Font(bold=True, color='B42318')
+        # Border for whole row
+        for col_idx in range(1, len(header) + 1):
+            ws.cell(row=row_idx, column=col_idx).border = cell_border
+        # Bold the last "Total Due" cell
+        last = ws.cell(row=row_idx, column=len(header))
+        last.font = Font(bold=True, color='B42318')
+        last.alignment = Alignment(horizontal='right')
+
+    # Column widths
+    widths = [14, 30, 12, 8, 22, 14, 12] + [7] * len(month_short) + [14]
+    from openpyxl.utils import get_column_letter
+    for idx, w in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(idx)].width = w
+    ws.row_dimensions[header_row_idx].height = 26
+    ws.freeze_panes = ws.cell(row=header_row_idx + 1, column=3)
+
+    # Legend on a second sheet
+    leg = wb.create_sheet('Legend')
+    leg.append(['Colour', 'Meaning'])
+    for c in leg[1]:
+        c.font = header_font
+        c.fill = header_fill
+        c.alignment = Alignment(horizontal='center')
+    legend_rows = [
+        ('Fully paid (all 12 months)', 'paid_full'),
+        ('Monthly fee paid', 'paid'),
+        ('Partial payment', 'partial'),
+        ('Overdue (past due date)', 'overdue'),
+        ('Upcoming month (not yet due)', 'pending'),
+    ]
+    for label, key in legend_rows:
+        leg.append([' ', label])
+        cell = leg.cell(row=leg.max_row, column=1)
+        cell.fill = fills[key]
+        cell.border = cell_border
+    leg.column_dimensions['A'].width = 12
+    leg.column_dimensions['B'].width = 36
+
+    buf = io.BytesIO()
+    wb.save(buf); buf.seek(0)
+    fname = 'due_list.xlsx'
+    return StreamingResponse(
+        buf, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition': f'attachment; filename="{fname}"'},
+    )
 
 
 # Shared query args for all fee-status export endpoints
