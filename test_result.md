@@ -471,22 +471,113 @@ frontend_placeholder:
             
             CONCLUSION: Monthly Fees tab is fully functional and displaying correct schedule data with proper status indicators.
 
+  - task: "Mobile Responsiveness - Layout Updates"
+    implemented: true
+    working: true
+    file: "frontend/src/components/layout/*, frontend/src/pages/*"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: |
+            ✅ COMPREHENSIVE MOBILE RESPONSIVENESS TEST COMPLETE (iPhone 12 Pro - 390x844 viewport)
+            
+            Tested all requested mobile layout requirements:
+            
+            1. LOGIN PAGE ✓
+               - Left decorative panel (.login-band) properly HIDDEN on mobile (hidden lg:flex working)
+               - Sign In card fills mobile screen with reasonable padding (width: 292px)
+               - No horizontal overflow (scrollWidth: 390px = viewport)
+            
+            2. DASHBOARD ✓
+               - Hamburger button [data-testid="mobile-nav-trigger"] VISIBLE on mobile
+               - Desktop sidebar (aside) properly HIDDEN on mobile (hidden lg:flex working)
+               - No horizontal overflow (scrollWidth: 390px)
+            
+            3. MOBILE DRAWER ✓
+               - Hamburger click opens Sheet/drawer from left with 19 navigation links
+               - All nav links visible (Dashboard, Students, Fees, etc.)
+               - Clicking nav link (Students) closes drawer and navigates correctly
+               - Drawer properly closes after navigation
+            
+            4. STUDENTS PAGE ✓
+               - Filter row stacks VERTICALLY on mobile (search y: 209, class filter y: 253)
+               - Search input width: 340px, Class filter width: 166px (both fit viewport)
+               - Table has horizontal scroll WITHIN container (scrollWidth: 364px in container)
+               - NO page-level horizontal overflow (body scrollWidth: 390px)
+            
+            5. STUDENT DETAIL PAGE ✓
+               - Header card stacks VERTICALLY on mobile (avatar y: 133, buttons y: 231)
+               - Tabs are WRAPPING properly (TabsList height: 92px > 50px, using flex-wrap h-auto)
+               - Monthly Fees tab accessible and functional
+               - Month cards display in 2-COLUMN GRID on mobile (grid-cols-2 working correctly)
+               - All 12 month cards render properly (Apr 2026 - Mar 2027)
+               - NO horizontal overflow (body scrollWidth: 390px)
+            
+            6. FEE COLLECTION PAGE ✓
+               - All 3 payment tabs (Monthly/Full/Custom) VISIBLE without cutoff after selecting student
+               - Tab positions: Monthly x:37 w:105, Full x:142 w:105, Custom x:248 w:105
+               - All tabs fit within viewport (rightmost edge: 353px < 390px)
+               - NO horizontal overflow (body scrollWidth: 390px)
+            
+            7. NO HORIZONTAL SCROLLBAR ON BODY ✓
+               - Verified across all pages: Login, Dashboard, Students, Student Detail, Fee Collection
+               - All pages have body scrollWidth = 390px (matching viewport)
+            
+            MINOR OBSERVATIONS (not critical):
+            - Console warnings: Recharts dimension warnings (library-level, not affecting functionality)
+            - Network errors: Razorpay CDN and Cloudflare RUM (not affecting app functionality)
+            - Fee Collection tabs appear only after student selection (by design)
+            
+            CONCLUSION: All mobile responsiveness requirements PASSED. The app is fully responsive on mobile viewport (390x844). No layout issues, no horizontal overflow, all interactive elements accessible and functional.
+
 metadata:
   created_by: "main_agent"
-  version: "1.3"
-  test_sequence: 14
+  version: "1.4"
+  test_sequence: 15
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Admin Collect Fee — Monthly / Full / Custom tabs (frontend, do not test yet)"
-    - "AssignFeeDialog — Month-wise breakdown preview (frontend, do not test yet)"
-    - "Reports — Student Fee Status dashboard (frontend, do not test yet)"
+    - "Mobile Responsiveness - Layout Updates (tested, working)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
+    - agent: "testing"
+      message: |
+        ✅ MOBILE RESPONSIVENESS TESTING COMPLETE - ALL TESTS PASSED
+        
+        Verified mobile layout on iPhone 12 Pro viewport (390x844) as requested:
+        
+        **SUCCESSES (7/7):**
+        1. ✅ Login page: Left panel hidden, card fills screen, no overflow
+        2. ✅ Dashboard: Hamburger visible, desktop sidebar hidden, no overflow
+        3. ✅ Mobile drawer: Opens/closes correctly, navigation works
+        4. ✅ Students page: Filters stack vertically, table scrolls within container
+        5. ✅ Student Detail: Header stacks, tabs wrap, Monthly Fees shows 2-column grid
+        6. ✅ Fee Collection: All 3 tabs visible without cutoff (after student selection)
+        7. ✅ NO horizontal scrollbar on body across all pages
+        
+        **LAYOUT VERIFICATION:**
+        - Login: Left decorative panel properly hidden (hidden lg:flex ✓)
+        - Dashboard: Hamburger [data-testid="mobile-nav-trigger"] visible ✓
+        - Drawer: Sheet opens with 19 nav links, closes after navigation ✓
+        - Students: Filters stack vertically (search y:209, class y:253) ✓
+        - Student Detail: Header stacks (avatar y:133, buttons y:231), tabs wrap (height:92px) ✓
+        - Monthly Fees: 2-column grid working (grid-cols-2) ✓
+        - Fee Collection: Tabs fit viewport (Monthly x:37, Full x:142, Custom x:248) ✓
+        
+        **NO ISSUES FOUND** - All mobile responsiveness requirements met.
+        
+        Minor observations (not critical):
+        - Console warnings from Recharts library (dimension calculations)
+        - Network errors from Razorpay CDN (not affecting functionality)
+        
+        The app is fully responsive and ready for mobile use.
     - agent: "main"
       message: |
         New iteration adds:

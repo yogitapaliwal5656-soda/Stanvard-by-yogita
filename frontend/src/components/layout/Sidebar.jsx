@@ -1,11 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   LayoutDashboard, Users, GraduationCap, Wallet, Receipt, CalendarCheck,
   BookOpen, CalendarDays, Megaphone, Image, Users2, Bell, FileBarChart,
-  Settings, ShieldCheck, School, ClipboardList, HeartHandshake, BarChart3
+  Settings, ShieldCheck, School, ClipboardList, HeartHandshake, BarChart3, Menu
 } from 'lucide-react';
+import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 
 const navFor = {
   super_admin: [
@@ -86,27 +87,66 @@ export const Sidebar = () => {
     <aside className="hidden lg:flex w-[260px] flex-col border-r border-border bg-[hsl(var(--secondary))]/40 h-[calc(100vh-56px)] sticky top-14 overflow-y-auto">
       <div className="px-3 py-4">
         <div className="text-xs uppercase tracking-wide text-muted-foreground px-2 mb-2">Navigation</div>
-        <nav className="flex flex-col gap-0.5">
-          {items.map((it) => (
-            <NavLink
-              key={it.to}
-              to={it.to}
-              end={it.to === '/' || it.to === '/parent'}
-              data-testid={`nav-${it.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}
-              className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
-                  isActive
-                    ? 'bg-card text-foreground font-medium shadow-[0_1px_2px_rgba(16,24,40,0.06)] border border-border'
-                    : 'text-foreground/75 hover:bg-card hover:text-foreground'
-                }`
-              }
-            >
-              <it.icon className="h-4 w-4 text-[hsl(var(--primary))]" />
-              <span>{it.label}</span>
-            </NavLink>
-          ))}
-        </nav>
+        <NavList items={items} />
       </div>
     </aside>
+  );
+};
+
+const NavList = ({ items, onNavigate }) => (
+  <nav className="flex flex-col gap-0.5">
+    {items.map((it) => (
+      <NavLink
+        key={it.to}
+        to={it.to}
+        end={it.to === '/' || it.to === '/parent'}
+        onClick={onNavigate}
+        data-testid={`nav-${it.label.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}
+        className={({ isActive }) =>
+          `flex items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
+            isActive
+              ? 'bg-card text-foreground font-medium shadow-[0_1px_2px_rgba(16,24,40,0.06)] border border-border'
+              : 'text-foreground/75 hover:bg-card hover:text-foreground'
+          }`
+        }
+      >
+        <it.icon className="h-4 w-4 text-[hsl(var(--primary))]" />
+        <span>{it.label}</span>
+      </NavLink>
+    ))}
+  </nav>
+);
+
+/**
+ * MobileSidebar — hamburger-triggered drawer that shows the same nav on small screens.
+ * Placed in the Header for mobile/tablet (<lg) breakpoints.
+ */
+export const MobileSidebar = () => {
+  const { user } = useAuth();
+  const items = navFor[user?.role] || [];
+  const [open, setOpen] = useState(false);
+  return (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger asChild>
+        <button
+          data-testid="mobile-nav-trigger"
+          aria-label="Open navigation"
+          className="lg:hidden h-9 w-9 -ml-1 rounded-md hover:bg-secondary flex items-center justify-center"
+        >
+          <Menu className="h-5 w-5 text-foreground" />
+        </button>
+      </SheetTrigger>
+      <SheetContent
+        side="left"
+        className="w-[280px] p-0 flex flex-col bg-card"
+      >
+        <SheetHeader className="px-4 py-3 border-b border-border">
+          <SheetTitle className="text-left h-font text-base font-semibold">Navigation</SheetTitle>
+        </SheetHeader>
+        <div className="flex-1 overflow-y-auto px-3 py-3">
+          <NavList items={items} onNavigate={() => setOpen(false)} />
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 };

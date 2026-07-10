@@ -246,7 +246,7 @@ export default function FeeCollection() {
                   ) : <span className="text-muted-foreground">Search & select student</span>}
                 </button>
               </PopoverTrigger>
-              <PopoverContent className="w-[420px] p-0">
+              <PopoverContent className="w-[92vw] sm:w-[420px] p-0">
                 <Command>
                   <CommandInput placeholder="Search by name or admission number…" />
                   <CommandList>
@@ -280,9 +280,15 @@ export default function FeeCollection() {
             <Card className="p-5 border-border">
               <Tabs value={tab} onValueChange={setTab}>
                 <TabsList className="grid grid-cols-3 w-full">
-                  <TabsTrigger value="monthly" data-testid="tab-monthly" className="gap-2"><CalendarDays className="h-4 w-4" /> Monthly</TabsTrigger>
-                  <TabsTrigger value="full" data-testid="tab-full" className="gap-2"><Receipt className="h-4 w-4" /> Full (Annual)</TabsTrigger>
-                  <TabsTrigger value="custom" data-testid="tab-custom" className="gap-2"><Plus className="h-4 w-4" /> Custom Items</TabsTrigger>
+                  <TabsTrigger value="monthly" data-testid="tab-monthly" className="gap-1.5 text-xs sm:text-sm">
+                    <CalendarDays className="h-4 w-4" /> <span className="hidden xs:inline sm:inline">Monthly</span><span className="xs:hidden sm:hidden">Month</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="full" data-testid="tab-full" className="gap-1.5 text-xs sm:text-sm">
+                    <Receipt className="h-4 w-4" /> <span className="hidden sm:inline">Full (Annual)</span><span className="sm:hidden">Full</span>
+                  </TabsTrigger>
+                  <TabsTrigger value="custom" data-testid="tab-custom" className="gap-1.5 text-xs sm:text-sm">
+                    <Plus className="h-4 w-4" /> <span className="hidden sm:inline">Custom Items</span><span className="sm:hidden">Custom</span>
+                  </TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="monthly">

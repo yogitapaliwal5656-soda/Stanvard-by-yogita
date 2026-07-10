@@ -70,9 +70,9 @@ export default function StudentsPage() {
         )}
       </div>
 
-      <Card className="p-4 border-border mb-4">
-        <div className="flex flex-col md:flex-row md:items-center gap-3">
-          <div className="relative flex-1 min-w-[240px]">
+      <Card className="p-3 sm:p-4 border-border mb-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+          <div className="relative flex-1 sm:min-w-[240px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               data-testid="students-search-input"
@@ -82,23 +82,25 @@ export default function StudentsPage() {
               className="pl-9"
             />
           </div>
-          <Select value={classFilter} onValueChange={setClassFilter}>
-            <SelectTrigger data-testid="students-filter-class-select" className="w-[180px]">
-              <Filter className="h-3.5 w-3.5 mr-1" /><SelectValue placeholder="Class" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Classes</SelectItem>
-              {classes.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-            </SelectContent>
-          </Select>
-          <Select value={sectionFilter} onValueChange={setSectionFilter}>
-            <SelectTrigger className="w-[140px]"><SelectValue placeholder="Section" /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Sections</SelectItem>
-              <SelectItem value="A">Section A</SelectItem>
-              <SelectItem value="B">Section B</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex gap-2 sm:gap-3">
+            <Select value={classFilter} onValueChange={setClassFilter}>
+              <SelectTrigger data-testid="students-filter-class-select" className="w-full sm:w-[180px]">
+                <Filter className="h-3.5 w-3.5 mr-1" /><SelectValue placeholder="Class" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Classes</SelectItem>
+                {classes.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={sectionFilter} onValueChange={setSectionFilter}>
+              <SelectTrigger className="w-full sm:w-[140px]"><SelectValue placeholder="Section" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Sections</SelectItem>
+                <SelectItem value="A">Section A</SelectItem>
+                <SelectItem value="B">Section B</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </Card>
 
