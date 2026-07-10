@@ -31,7 +31,7 @@ from models import (
     ClassRoom, ClassCreate,
     FeeHead, FeeHeadCreate, FeePlan, FeePlanCreate, FeeAssignment, FeeAssignmentCreate,
     FeeAssignmentUpdate, FeeAssignmentItem,
-    Payment, PaymentCreate, PaymentLineItem,
+    Payment, PaymentCreate, PaymentLineItem, PaymentEdit, PaymentVoid,
     RazorpayOrderRequest, RazorpayVerifyRequest,
     AttendanceRecord, AttendanceBulkMark,
     Homework, HomeworkCreate,
@@ -988,6 +988,159 @@ async def download_receipt(payment_id: str, current=Depends(get_current_user)):
     )
 
 
+# ---------- SUPER ADMIN: EDIT / VOID / RESTORE RECEIPTS ----------
+def _payment_snapshot(p: dict) -> dict:
+    """Return an immutable snapshot of the mutable financial fields of a payment.
+    Stored inside `edit_history` for a full audit trail of every super-admin edit."""
+    return {
+        'items': p.get('items') or [],
+        'subtotal': p.get('subtotal'),
+        'discount': p.get('discount'),
+        'late_fee': p.get('late_fee'),
+        'total_paid': p.get('total_paid'),
+        'payment_mode': p.get('payment_mode'),
+        'txn_ref': p.get('txn_ref'),
+        'remarks': p.get('remarks'),
+        'paid_at': p.get('paid_at'),
+        'status': p.get('status'),
+    }
+
+
+@api.patch('/payments/{payment_id}',
+           dependencies=[Depends(require_roles('super_admin'))])
+async def edit_payment(payment_id: str, body: PaymentEdit,
+                       current=Depends(get_current_user)):
+    """Super-admin only. Edit a previously collected payment (fix wrong items,
+    amounts, mode, etc.). The `receipt_number` is preserved for financial
+    continuity; every change is recorded in `edit_history` for audit."""
+    p = await payments_col.find_one({'id': payment_id}, {'_id': 0})
+    if not p:
+        raise HTTPException(404, 'Payment not found')
+    if not (body.reason and body.reason.strip()):
+        raise HTTPException(400, 'Reason is required for editing a receipt')
+    if p.get('status') == 'voided':
+        raise HTTPException(400, 'Cannot edit a voided receipt. Restore it first.')
+
+    # Snapshot BEFORE mutation.
+    prev = _payment_snapshot(p)
+    prev['edited_at'] = now_iso()
+    prev['edited_by_id'] = current.get('id')
+    prev['edited_by_name'] = current.get('full_name')
+    prev['reason'] = body.reason.strip()
+
+    update: Dict[str, Any] = {}
+    if body.items is not None:
+        items_dump = [i.model_dump() for i in body.items]
+        subtotal = sum(float(i.get('amount') or 0) for i in items_dump)
+        discount = float(body.discount if body.discount is not None else (p.get('discount') or 0))
+        late_fee = float(body.late_fee if body.late_fee is not None else (p.get('late_fee') or 0))
+        update['items'] = items_dump
+        update['subtotal'] = subtotal
+        update['discount'] = discount
+        update['late_fee'] = late_fee
+        update['total_paid'] = round(subtotal + late_fee - discount, 2)
+    else:
+        # items unchanged, but discount / late_fee may still change → recompute total
+        if body.discount is not None or body.late_fee is not None:
+            subtotal = float(p.get('subtotal') or 0)
+            discount = float(body.discount if body.discount is not None else (p.get('discount') or 0))
+            late_fee = float(body.late_fee if body.late_fee is not None else (p.get('late_fee') or 0))
+            update['discount'] = discount
+            update['late_fee'] = late_fee
+            update['total_paid'] = round(subtotal + late_fee - discount, 2)
+
+    if body.payment_mode is not None:
+        update['payment_mode'] = body.payment_mode
+    if body.txn_ref is not None:
+        update['txn_ref'] = body.txn_ref
+    if body.remarks is not None:
+        update['remarks'] = body.remarks
+    if body.paid_at is not None and body.paid_at.strip():
+        update['paid_at'] = body.paid_at
+
+    update['edited_at'] = prev['edited_at']
+    update['edited_by_id'] = current.get('id')
+    update['edited_by_name'] = current.get('full_name')
+    update['edited_reason'] = body.reason.strip()
+
+    await payments_col.update_one(
+        {'id': payment_id},
+        {'$set': update, '$push': {'edit_history': prev}},
+    )
+
+    await log_audit(action='payment.edit', current_user=current,
+                    school_id=p.get('school_id'),
+                    entity_type='payment', entity_id=payment_id,
+                    details={
+                        'receipt_number': p.get('receipt_number'),
+                        'reason': body.reason.strip(),
+                        'previous_total': prev.get('total_paid'),
+                        'new_total': update.get('total_paid', prev.get('total_paid')),
+                    })
+    return await payments_col.find_one({'id': payment_id}, {'_id': 0})
+
+
+@api.post('/payments/{payment_id}/void',
+          dependencies=[Depends(require_roles('super_admin'))])
+async def void_payment(payment_id: str, body: PaymentVoid,
+                       current=Depends(get_current_user)):
+    """Super-admin only. Void / cancel a receipt. The payment is retained for
+    audit but its `status` is set to `voided`, which automatically excludes it
+    from all fee-schedule / dues / collection-report aggregations."""
+    p = await payments_col.find_one({'id': payment_id}, {'_id': 0})
+    if not p:
+        raise HTTPException(404, 'Payment not found')
+    if p.get('status') == 'voided':
+        raise HTTPException(400, 'Receipt is already voided')
+    if not (body.reason and body.reason.strip()):
+        raise HTTPException(400, 'Reason is required to void a receipt')
+
+    ts = now_iso()
+    await payments_col.update_one(
+        {'id': payment_id},
+        {'$set': {
+            'status': 'voided',
+            'voided_at': ts,
+            'voided_by_id': current.get('id'),
+            'voided_by_name': current.get('full_name'),
+            'void_reason': body.reason.strip(),
+        }},
+    )
+    await log_audit(action='payment.void', current_user=current,
+                    school_id=p.get('school_id'),
+                    entity_type='payment', entity_id=payment_id,
+                    details={
+                        'receipt_number': p.get('receipt_number'),
+                        'reason': body.reason.strip(),
+                        'amount_reversed': p.get('total_paid'),
+                        'student_id': p.get('student_id'),
+                    })
+    return await payments_col.find_one({'id': payment_id}, {'_id': 0})
+
+
+@api.post('/payments/{payment_id}/restore',
+          dependencies=[Depends(require_roles('super_admin'))])
+async def restore_payment(payment_id: str, current=Depends(get_current_user)):
+    """Super-admin only. Un-void a previously voided receipt (mistake reversal)."""
+    p = await payments_col.find_one({'id': payment_id}, {'_id': 0})
+    if not p:
+        raise HTTPException(404, 'Payment not found')
+    if p.get('status') != 'voided':
+        raise HTTPException(400, 'Receipt is not voided')
+
+    await payments_col.update_one(
+        {'id': payment_id},
+        {'$set': {'status': 'success'},
+         '$unset': {'voided_at': '', 'voided_by_id': '',
+                    'voided_by_name': '', 'void_reason': ''}},
+    )
+    await log_audit(action='payment.restore', current_user=current,
+                    school_id=p.get('school_id'),
+                    entity_type='payment', entity_id=payment_id,
+                    details={'receipt_number': p.get('receipt_number')})
+    return await payments_col.find_one({'id': payment_id}, {'_id': 0})
+
+
 # =====================================================
 # ATTENDANCE
 # =====================================================
@@ -1364,11 +1517,11 @@ async def dashboard_summary(request: Request, current=Depends(get_current_user),
     total_students = await students_col.count_documents({'school_id': sid, 'status': 'active'})
     total_staff = await staff_col.count_documents({'school_id': sid, 'status': 'active'})
 
-    # Today's collection
-    today_payments = await payments_col.find({'school_id': sid, 'paid_at': {'$gte': today, '$lt': today + 'T23:59:59'}}, {'_id': 0}).to_list(2000)
+    # Today's collection (exclude voided receipts)
+    today_payments = await payments_col.find({'school_id': sid, 'status': 'success', 'paid_at': {'$gte': today, '$lt': today + 'T23:59:59'}}, {'_id': 0}).to_list(2000)
     today_collection = sum(p.get('total_paid', 0) for p in today_payments)
-    # Monthly collection
-    month_payments = await payments_col.find({'school_id': sid, 'paid_at': {'$gte': month_start}}, {'_id': 0}).to_list(5000)
+    # Monthly collection (exclude voided receipts)
+    month_payments = await payments_col.find({'school_id': sid, 'status': 'success', 'paid_at': {'$gte': month_start}}, {'_id': 0}).to_list(5000)
     monthly_collection = sum(p.get('total_paid', 0) for p in month_payments)
 
     # Attendance today
@@ -1391,16 +1544,16 @@ async def dashboard_summary(request: Request, current=Depends(get_current_user),
         'school_id': sid, 'status': 'published'
     }, {'_id': 0}).sort('created_at', -1).limit(5).to_list(5)
 
-    # Pending fees (naive: students with assignments who haven't paid this month)
+    # Pending fees (naive: students with assignments who haven't paid this month) — exclude voided
     with_assignments = await fee_assignments_col.distinct('student_id', {'school_id': sid})
-    paid_this_month = await payments_col.distinct('student_id', {'school_id': sid, 'paid_at': {'$gte': month_start}})
+    paid_this_month = await payments_col.distinct('student_id', {'school_id': sid, 'status': 'success', 'paid_at': {'$gte': month_start}})
     pending_students = max(len(with_assignments) - len(paid_this_month), 0)
 
-    # Collection trend last 7 days
+    # Collection trend last 7 days (exclude voided)
     trend = []
     for i in range(6, -1, -1):
         d = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
-        payments = await payments_col.find({'school_id': sid, 'paid_at': {'$gte': d, '$lt': d + 'T23:59:59'}}, {'_id': 0}).to_list(1000)
+        payments = await payments_col.find({'school_id': sid, 'status': 'success', 'paid_at': {'$gte': d, '$lt': d + 'T23:59:59'}}, {'_id': 0}).to_list(1000)
         trend.append({'date': d, 'amount': sum(p.get('total_paid', 0) for p in payments)})
 
     return {

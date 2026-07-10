@@ -131,6 +131,55 @@ def _build_receipt_flowables(payment: Dict[str, Any], school: Dict[str, Any],
         ('TOPPADDING', (0, 0), (-1, -1), 1),
     ]))
     story.append(meta_tbl)
+
+    # Small "EDITED" / "VOIDED" chip in the meta area (when applicable)
+    status_style = ParagraphStyle('st', parent=styles['Normal'], fontSize=7,
+                                  leading=8, alignment=TA_LEFT)
+    if payment.get('status') == 'voided':
+        vt = payment.get('voided_at', '') or ''
+        try:
+            vt = datetime.fromisoformat(vt.replace('Z', '+00:00')).strftime('%d %b %Y, %H:%M')
+        except Exception:
+            pass
+        vr = (payment.get('void_reason') or '').strip()
+        chip = Table([[Paragraph(
+            f'<font color="#B42318"><b>VOIDED</b></font> · {vt}'
+            + (f' · <i>{vr}</i>' if vr else ''),
+            status_style,
+        )]], colWidths=[130 * mm])
+        chip.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#FEE4E2')),
+            ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#FECACA')),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 2),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ]))
+        story.append(Spacer(1, 2))
+        story.append(chip)
+    elif payment.get('edited_at'):
+        et = payment.get('edited_at', '')
+        try:
+            et = datetime.fromisoformat(et.replace('Z', '+00:00')).strftime('%d %b %Y, %H:%M')
+        except Exception:
+            pass
+        er = (payment.get('edited_reason') or '').strip()
+        chip = Table([[Paragraph(
+            f'<font color="#B45309"><b>REVISED</b></font> · {et}'
+            + (f' · <i>{er}</i>' if er else ''),
+            status_style,
+        )]], colWidths=[130 * mm])
+        chip.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#FEF3C7')),
+            ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor('#FDE68A')),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 2),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ]))
+        story.append(Spacer(1, 2))
+        story.append(chip)
+
     story.append(Spacer(1, 4))
 
     # Student details
@@ -245,6 +294,38 @@ def generate_receipt_pdf(payment: Dict[str, Any], school: Dict[str, Any],
     )
     styles = getSampleStyleSheet()
 
+    is_voided = payment.get('status') == 'voided'
+
+    def _draw_watermark(canvas, _doc):
+        if not is_voided:
+            return
+        page_w, page_h = page_size
+        canvas.saveState()
+        canvas.setFont('Helvetica-Bold', 110)
+        canvas.setFillColor(colors.HexColor('#FCA5A5'))
+        # Semi-transparent big diagonal watermark on each half
+        try:
+            canvas.setFillAlpha(0.30)
+        except Exception:
+            pass
+        # Left half
+        canvas.translate(page_w * 0.25, page_h * 0.5)
+        canvas.rotate(30)
+        canvas.drawCentredString(0, 0, 'VOIDED')
+        canvas.restoreState()
+        # Right half
+        canvas.saveState()
+        try:
+            canvas.setFillAlpha(0.30)
+        except Exception:
+            pass
+        canvas.setFillColor(colors.HexColor('#FCA5A5'))
+        canvas.setFont('Helvetica-Bold', 110)
+        canvas.translate(page_w * 0.75, page_h * 0.5)
+        canvas.rotate(30)
+        canvas.drawCentredString(0, 0, 'VOIDED')
+        canvas.restoreState()
+
     # Build the two copies as separate flowable lists
     office_copy = _build_receipt_flowables(payment, school, student,
                                             'OFFICE COPY', styles)
@@ -272,7 +353,7 @@ def generate_receipt_pdf(payment: Dict[str, Any], school: Dict[str, Any],
          None, [2, 2]),
     ]))
 
-    doc.build([outer])
+    doc.build([outer], onFirstPage=_draw_watermark, onLaterPages=_draw_watermark)
     buffer.seek(0)
     return buffer.getvalue()
 

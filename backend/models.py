@@ -329,11 +329,21 @@ class Payment(BaseDoc):
     razorpay_order_id: Optional[str] = None
     razorpay_payment_id: Optional[str] = None
     razorpay_signature: Optional[str] = None
-    status: str = 'success'  # success|pending|refunded|failed
+    status: str = 'success'  # success|pending|refunded|failed|voided
     remarks: Optional[str] = None
     collected_by_id: Optional[str] = None
     collected_by_name: Optional[str] = None
     paid_at: str = Field(default_factory=now_iso)
+    # --- Super-admin edit / void trail ---
+    edit_history: List[dict] = Field(default_factory=list)
+    edited_at: Optional[str] = None
+    edited_by_id: Optional[str] = None
+    edited_by_name: Optional[str] = None
+    edited_reason: Optional[str] = None
+    voided_at: Optional[str] = None
+    voided_by_id: Optional[str] = None
+    voided_by_name: Optional[str] = None
+    void_reason: Optional[str] = None
 
 
 class PaymentCreate(BaseModel):
@@ -345,6 +355,22 @@ class PaymentCreate(BaseModel):
     payment_mode: str = 'cash'
     txn_ref: Optional[str] = None
     remarks: Optional[str] = None
+
+
+class PaymentEdit(BaseModel):
+    """Super-admin edit request. student_id cannot be changed."""
+    items: Optional[List[PaymentLineItem]] = None
+    discount: Optional[float] = None
+    late_fee: Optional[float] = None
+    payment_mode: Optional[str] = None
+    txn_ref: Optional[str] = None
+    remarks: Optional[str] = None
+    paid_at: Optional[str] = None
+    reason: str  # required — audit trail
+
+
+class PaymentVoid(BaseModel):
+    reason: str  # required
 
 
 class RazorpayOrderRequest(BaseModel):

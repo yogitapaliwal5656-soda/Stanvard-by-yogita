@@ -11,9 +11,12 @@ import { Button } from '@/components/ui/button';
 import {
   ArrowLeft, Wallet, Receipt as ReceiptIcon, Pencil, Plus, Trash2,
   CalendarDays, CheckCircle2, AlertCircle, Clock, CircleDashed,
+  Ban, History, RotateCcw,
 } from 'lucide-react';
 import { EditStudentDialog } from '@/components/EditStudentDialog';
 import { AssignFeeDialog } from '@/components/AssignFeeDialog';
+import EditReceiptDialog from '@/components/EditReceiptDialog';
+import VoidReceiptDialog from '@/components/VoidReceiptDialog';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 
@@ -32,6 +35,8 @@ export default function StudentDetail() {
   const [editOpen, setEditOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [editingAssignment, setEditingAssignment] = useState(null);
+  const [editingReceipt, setEditingReceipt] = useState(null);
+  const [voidingReceipt, setVoidingReceipt] = useState(null);
 
   const canEdit = ['super_admin', 'school_admin'].includes(user?.role);
 
@@ -228,25 +233,59 @@ export default function StudentDetail() {
           </Card>
         </TabsContent>
         <TabsContent value="payments">
-          <Card className="p-6 border-border">
+          <Card className="p-4 sm:p-6 border-border">
             <Table>
-              <TableHeader><TableRow><TableHead>Receipt</TableHead><TableHead>Date</TableHead><TableHead>Mode</TableHead><TableHead className="text-right">Amount</TableHead><TableHead></TableHead></TableRow></TableHeader>
+              <TableHeader><TableRow><TableHead>Receipt</TableHead><TableHead>Date</TableHead><TableHead className="hidden sm:table-cell">Mode</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Amount</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
               <TableBody>
-                {payments.map((p) => (
-                  <TableRow key={p.id}>
-                    <TableCell className="font-mono text-xs">{p.receipt_number}</TableCell>
-                    <TableCell>{(p.paid_at || '').slice(0, 10)}</TableCell>
-                    <TableCell className="capitalize">{String(p.payment_mode).replace('_', ' ')}</TableCell>
-                    <TableCell className="text-right font-semibold tabular-nums">{money(p.total_paid)}</TableCell>
-                    <TableCell>
-                      <Button size="sm" variant="outline" onClick={async () => {
-                        const resp = await api.get(`/payments/${p.id}/receipt.pdf`, { responseType: 'blob' });
-                        const url = window.URL.createObjectURL(new Blob([resp.data], { type: 'application/pdf' }));
-                        window.open(url, '_blank');
-                      }} className="gap-1"><ReceiptIcon className="h-3.5 w-3.5" /> PDF</Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {payments.length === 0 && (
+                  <TableRow><TableCell colSpan={6} className="py-6 text-center text-sm text-muted-foreground">No payments yet.</TableCell></TableRow>
+                )}
+                {payments.map((p) => {
+                  const isVoided = (p.status || 'success') === 'voided';
+                  return (
+                    <TableRow key={p.id} className={isVoided ? 'opacity-70' : ''}>
+                      <TableCell className={`font-mono text-xs ${isVoided ? 'line-through' : ''}`}>{p.receipt_number}</TableCell>
+                      <TableCell>{(p.paid_at || '').slice(0, 10)}</TableCell>
+                      <TableCell className="hidden sm:table-cell capitalize">{String(p.payment_mode).replace('_', ' ')}</TableCell>
+                      <TableCell>
+                        {isVoided ? (
+                          <Badge className="bg-[#FEE4E2] text-[#B42318] border border-[#FECACA] gap-1"><Ban className="h-3 w-3" /> VOIDED</Badge>
+                        ) : p.edited_at ? (
+                          <Badge className="bg-[#FEF3C7] text-[#92400E] border border-[#FDE68A] gap-1"><History className="h-3 w-3" /> Revised</Badge>
+                        ) : (
+                          <Badge className="bg-[#E6F6F4] text-[#0F766E] border border-[#BFEAE6]">Success</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className={`text-right font-semibold tabular-nums ${isVoided ? 'line-through text-muted-foreground' : ''}`}>{money(p.total_paid)}</TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1 flex-wrap">
+                          <Button size="sm" variant="outline" onClick={async () => {
+                            const resp = await api.get(`/payments/${p.id}/receipt.pdf`, { responseType: 'blob' });
+                            const url = window.URL.createObjectURL(new Blob([resp.data], { type: 'application/pdf' }));
+                            window.open(url, '_blank');
+                            setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+                          }} className="h-8 gap-1"><ReceiptIcon className="h-3.5 w-3.5" /> PDF</Button>
+                          {user?.role === 'super_admin' && !isVoided && (
+                            <>
+                              <Button data-testid={`sd-receipt-edit-${p.id}`} size="sm" variant="outline" onClick={() => setEditingReceipt(p)} className="h-8 gap-1"><Pencil className="h-3.5 w-3.5" /><span className="hidden sm:inline">Edit</span></Button>
+                              <Button data-testid={`sd-receipt-void-${p.id}`} size="sm" variant="outline" onClick={() => setVoidingReceipt(p)} className="h-8 gap-1 text-destructive hover:text-destructive hover:bg-destructive/5"><Ban className="h-3.5 w-3.5" /><span className="hidden sm:inline">Void</span></Button>
+                            </>
+                          )}
+                          {user?.role === 'super_admin' && isVoided && (
+                            <Button data-testid={`sd-receipt-restore-${p.id}`} size="sm" variant="outline" onClick={async () => {
+                              if (!window.confirm(`Restore voided receipt ${p.receipt_number}?`)) return;
+                              try {
+                                await api.post(`/payments/${p.id}/restore`);
+                                toast.success('Receipt restored');
+                                load();
+                              } catch (e) { toast.error(e.response?.data?.detail || 'Failed to restore'); }
+                            }} className="h-8 gap-1"><RotateCcw className="h-3.5 w-3.5" /><span className="hidden sm:inline">Restore</span></Button>
+                          )}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </Card>
@@ -255,6 +294,10 @@ export default function StudentDetail() {
 
       <EditStudentDialog open={editOpen} onOpenChange={setEditOpen} student={student} classes={classes} onSaved={load} />
       <AssignFeeDialog open={assignOpen} onOpenChange={setAssignOpen} student={student} feePlans={feePlans} feeHeads={feeHeads} existingAssignment={editingAssignment} onSaved={load} />
+      <EditReceiptDialog open={!!editingReceipt} onOpenChange={(v) => !v && setEditingReceipt(null)}
+                         payment={editingReceipt} onSaved={() => { setEditingReceipt(null); load(); }} />
+      <VoidReceiptDialog open={!!voidingReceipt} onOpenChange={(v) => !v && setVoidingReceipt(null)}
+                         payment={voidingReceipt} onVoided={() => { setVoidingReceipt(null); load(); }} />
     </AppShell>
   );
 }
